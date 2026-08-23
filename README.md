@@ -75,8 +75,7 @@ for cookie `Secure` flag. Example: `toottok.toml.example`.
 
 ## Docs
 
-Architecture: `ARCHITECTURE.md` (kept in repo — planning docs and
-research notes are private/local).
+Architecture: `ARCHITECTURE.md`.
 
 ## License
 
