@@ -144,6 +144,9 @@ impl Config {
         if let Ok(dir) = std::env::var("TOOTTOK_MEDIA_DIR") {
             cfg.media_dir = dir;
         }
+        if let Ok(dir) = std::env::var("TOOTTOK_WEB_DIR") {
+            cfg.web_dir = dir;
+        }
         if let Ok(conc) = std::env::var("TOOTTOK_WORKER_CONCURRENCY") {
             if let Ok(parsed) = conc.parse::<usize>() {
                 cfg.worker_concurrency = parsed;

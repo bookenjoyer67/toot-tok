@@ -9,7 +9,9 @@ services:
       POSTGRES_PASSWORD: toottok
       POSTGRES_DB: toottok_dev
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # postgres:18 image expects the mount at the parent; it places data in
+      # /var/lib/postgresql/data itself (pg_upgrade-friendly layout).
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U toottok"]
       interval: 5s
@@ -29,9 +31,14 @@ services:
       db:
         condition: service_healthy
     ports:
-      - "8080:8080"
+      # 8080 is owned by the komun.buzz nginx frontend on this box.
+      - "8088:8080"
     volumes:
       - media:/data/media
+      # Prebuilt frontend overrides the image copy (iterating on web changes
+      # without a full image rebuild). Compose resolves ./ relative to the
+      # compose file's dir — the repo root is one up from deploy/.
+      - ../web/build:/usr/local/share/toottok/web:ro
 
 volumes:
   pgdata:
