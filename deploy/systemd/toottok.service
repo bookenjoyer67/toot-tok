@@ -1,0 +1,28 @@
+# TootTok systemd unit (bare-metal installs).
+# Hardened per ARCHITECTURE.md section 5 — ffmpeg runs on attacker input.
+[Unit]
+Description=TootTok federated short-video server
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User=toottok
+Group=toottok
+WorkingDirectory=/var/lib/toottok
+Environment=DATABASE_URL=postgres://toottok:toottok@127.0.0.1:5432/toottok_dev
+ExecStart=/usr/local/bin/toottok serve
+Restart=on-failure
+RestartSec=5
+
+# sandbox (media pipeline processes untrusted video)
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/toottok/media
+
+[Install]
+WantedBy=multi-user.target

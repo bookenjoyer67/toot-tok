@@ -1,0 +1,14 @@
+# TootTok server config — defaults shown. Override via env where noted.
+bind_addr = "127.0.0.1:8080"
+# DATABASE_URL env var overrides this:
+database_url = "postgres://toottok:toottok@127.0.0.1:5433/toottok_dev"
+# TOOTTOK_MEDIA_DIR env var overrides this:
+media_dir = "./media"
+# TOOTTOK_WORKER_CONCURRENCY env var overrides this:
+worker_concurrency = 2
+# TOOTTOK_JOBS_JOB_TIMEOUT_SECS env var overrides this; a job that overruns it
+# is treated as failed (clip failed, attempts bumped, possibly dead-lettered).
+# 900s clears the worst-case ladder (~390s) while per-run ffmpeg bounds stay put:
+jobs_job_timeout_secs = 900
+# TOOTTOK_FFMPEG_THREADS env var overrides this; -threads for every ffmpeg run:
+ffmpeg_threads = 2

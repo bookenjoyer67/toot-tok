@@ -1,0 +1,49 @@
+[workspace]
+resolver = "2"
+members = ["crates/db", "crates/media", "crates/federation", "crates/server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[workspace.dependencies]
+toottok-db = { path = "crates/db" }
+toottok-media = { path = "crates/media" }
+toottok-federation = { path = "crates/federation" }
+
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "fs", "io-util", "process"] }
+tokio-util = { version = "0.7", features = ["io"] }
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+hex = "0.4"
+axum = { version = "0.8", features = ["multipart"] }
+sqlx = { version = "=0.8.6", features = ["runtime-tokio", "tls-rustls", "postgres", "migrate", "json", "chrono"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1" }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+toml = "0.8"
+argon2 = "0.5"
+tower = { version = "0.5", features = ["util"] }
+tempfile = "3"
+http = "1"
+rand = "0.8"
+base64 = "0.22"
+rsa = { version = "0.9", features = ["pem"] }
+activitypub_federation = { version = "=0.7.0-beta.11", default-features = false, features = ["axum"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+reqwest-middleware = "0.5"
+url = { version = "2", features = ["serde"] }
+bytes = "1"
+httpdate = "1"
+http-signature-normalization-reqwest = { version = "0.14", default-features = false, features = ["sha-2", "middleware", "default-spawner"] }
+async-trait = "0.1"
+
+[profile.release]
+lto = "thin"

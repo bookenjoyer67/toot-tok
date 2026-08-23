@@ -1,0 +1,38 @@
+# TootTok LAN deployment (Alpine homelab) — dev/test profile.
+# LAN-only HTTP by owner decision (no domain/cloudflare). Federation needs
+# public HTTPS later — swap caddy config then; compose structure stays.
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: toottok
+      POSTGRES_PASSWORD: toottok
+      POSTGRES_DB: toottok_dev
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U toottok"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    image: toottok:local
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      DATABASE_URL: postgres://toottok:toottok@db:5432/toottok_dev
+      TOOTTOK_BIND: 0.0.0.0:8080
+      TOOTTOK_MEDIA_DIR: /data/media
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    volumes:
+      - media:/data/media
+
+volumes:
+  pgdata:
+  media:
