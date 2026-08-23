@@ -75,10 +75,8 @@ for cookie `Secure` flag. Example: `toottok.toml.example`.
 
 ## Docs
 
-- Vision & scope: `docs/VISION.md`
-- Architecture: `ARCHITECTURE.md`
-- Build plan: `docs/BUILD_PLAN.md`
-- Research (fediverse recon, CVE notes): `docs/research/`
+Architecture: `ARCHITECTURE.md` (kept in repo — planning docs and
+research notes are private/local).
 
 ## License
 
