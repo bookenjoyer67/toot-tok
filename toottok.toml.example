@@ -1,0 +1,61 @@
+# TootTok server config — full key reference. Every key also exists as a
+# TOOTTOK_* env var (see comments). Copy to toottok.toml and edit.
+
+# Address the HTTP server binds. LAN deploy: "0.0.0.0:8080".
+# Env: TOOTTOK_BIND
+bind_addr = "127.0.0.1:8080"
+
+# Postgres connection string.
+# Env: DATABASE_URL
+database_url = "postgres://toottok:***@127.0.0.1:5433/toottok_dev"
+
+# Where uploaded/transcoded media lives.
+# Env: TOOTTOK_MEDIA_DIR
+media_dir = "./media"
+
+# Where the built frontend (SvelteKit adapter-static output) lives. The
+# server serves it at / with an index.html SPA fallback.
+# Env: TOOTTOK_WEB_DIR
+web_dir = "./web/build"
+
+# Media-pipeline worker tasks.
+# Env: TOOTTOK_WORKER_CONCURRENCY
+worker_concurrency = 2
+
+# Per-job hard cap. A job that overruns it is treated as failed (clip
+# failed, attempts bumped, possibly dead-lettered). 900s clears the
+# worst-case transcode ladder (~390s) while per-run ffmpeg bounds stay.
+# Env: TOOTTOK_JOBS_JOB_TIMEOUT_SECS
+jobs_job_timeout_secs = 900
+
+# -threads passed to every ffmpeg invocation (transcode + probe).
+# Env: TOOTTOK_FFMPEG_THREADS
+ffmpeg_threads = 2
+
+# True when a TLS terminator (Caddy/nginx) fronts the server: session
+# cookies get the Secure flag. Keep false for plain-HTTP LAN dev.
+# Env: TOOTTOK_BEHIND_TLS
+behind_tls = false
+
+# IPs of trusted reverse proxies. When the direct peer is one of these,
+# the client IP comes from the leftmost X-Forwarded-For hop (rate limits
+# key off the real client). Example behind compose/Caddy:
+# trusted_proxies = ["172.18.0.1"]
+# Env: TOOTTOK_TRUSTED_PROXIES (comma-separated)
+trusted_proxies = []
+
+# Public hostname used for canonical federation URLs (WebFinger
+# acct:user@domain, Actor ids, NodeInfo links).
+# Env: TOOTTOK_DOMAIN
+domain = "toottok.test"
+
+# Optional public port appended to federation URLs for installs without a
+# reverse proxy on :443 (dev only — runs the federation crate in debug
+# mode allowing http + localhost).
+# Env: TOOTTOK_PUBLIC_PORT
+# public_port = 8080
+
+# DEV/TEST ONLY: permits loopback peers and http for the two-instance
+# localhost federation rig. NEVER set in production.
+# Env: TOOTTOK_ALLOW_INSECURE_LOOPBACK_PEERS
+allow_insecure_loopback_peers = false
