@@ -215,15 +215,23 @@
 				<ul class="list">
 					{#each clips as c, i (clipKey(c, i))}
 						<li class="item">
-							<div class="clip-body">
-								<p class="caption">{clipText(c) || '(no caption)'}</p>
-								{#if c.author?.username || c.created_at}
-									<p class="meta">
-										{#if c.author?.username}<span>{handle(c.author)}</span>{/if}
-										{#if c.created_at}<span>{timeAgo(c.created_at)}</span>{/if}
-									</p>
-								{/if}
-							</div>
+							{#if c.id}
+								<a class="clip-link" href="/clips/{c.id}">
+									<div class="clip-body">
+										<p class="caption">{clipText(c) || '(no caption)'}</p>
+										{#if c.author?.username || c.created_at}
+											<p class="meta">
+												{#if c.author?.username}<span>{handle(c.author)}</span>{/if}
+												{#if c.created_at}<span>{timeAgo(c.created_at)}</span>{/if}
+											</p>
+										{/if}
+									</div>
+								</a>
+							{:else}
+								<div class="clip-body">
+									<p class="caption">{clipText(c) || '(no caption)'}</p>
+								</div>
+							{/if}
 						</li>
 					{/each}
 				</ul>
@@ -393,6 +401,13 @@
 	}
 
 	.clip-body {
+		min-width: 0;
+	}
+
+	.clip-link {
+		display: block;
+		text-decoration: none;
+		color: inherit;
 		min-width: 0;
 	}
 

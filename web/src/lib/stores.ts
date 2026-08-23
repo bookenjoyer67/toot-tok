@@ -9,14 +9,15 @@ export interface SessionUser {
 
 export interface MePayload {
 	username: string;
-	csrf?: string;
+	// Backend /accounts/me returns the token under `csrf_token`.
+	csrf_token?: string;
 	is_admin?: boolean;
 }
 
 export function applyMe(me: MePayload): void {
 	sessionUser.set({
 		username: me.username,
-		csrf: me.csrf ?? '',
+		csrf: me.csrf_token ?? '',
 		isAdmin: me.is_admin ?? false
 	});
 }

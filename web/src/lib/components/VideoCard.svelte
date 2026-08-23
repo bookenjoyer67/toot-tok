@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { onDestroy, untrack } from 'svelte';
-	import { apiPost } from '$lib/api';
+	import { untrack } from 'svelte';
+	import { apiDelete, apiPost } from '$lib/api';
 	import { showToast } from '$lib/toast';
 	import type { Clip } from '$lib/types';
 
@@ -11,8 +11,6 @@
 	let muted = $state(true);
 	let liked = $state(false);
 	let likeCount = $state(untrack(() => clip.like_count));
-	let burst = $state(false);
-	let tapTimer: ReturnType<typeof setTimeout> | null = null;
 
 	$effect(() => {
 		const v = video;
@@ -29,25 +27,6 @@
 		if (video) video.muted = muted;
 	});
 
-	onDestroy(() => {
-		if (tapTimer) clearTimeout(tapTimer);
-	});
-
-	function handleTap(): void {
-		if (tapTimer) {
-			clearTimeout(tapTimer);
-			tapTimer = null;
-			void like();
-			burst = true;
-			setTimeout(() => (burst = false), 600);
-			return;
-		}
-		tapTimer = setTimeout(() => {
-			tapTimer = null;
-			togglePlay();
-		}, 220);
-	}
-
 	function togglePlay(): void {
 		const v = video;
 		if (!v) return;
@@ -56,7 +35,17 @@
 	}
 
 	async function like(): Promise<void> {
-		if (liked) return;
+		if (liked) {
+			liked = false;
+			likeCount -= 1;
+			try {
+				await apiDelete(`/clips/${clip.id}/like`);
+			} catch {
+				liked = true;
+				likeCount += 1;
+			}
+			return;
+		}
 		liked = true;
 		likeCount += 1;
 		try {
@@ -97,15 +86,7 @@
 	></video>
 
 	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-	<div class="tap-layer" onclick={handleTap}></div>
-
-	{#if burst}
-		<svg class="burst" viewBox="0 0 24 24" aria-hidden="true">
-			<path
-				d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
-			/>
-		</svg>
-	{/if}
+	<div class="tap-layer" onclick={togglePlay}></div>
 
 	<div class="overlay">
 		<p class="handle">@{clip.author.username}</p>
@@ -235,40 +216,11 @@
 		cursor: pointer;
 	}
 
-	.burst {
-		position: absolute;
-		top: 50%;
-		left: 50%;
-		width: 96px;
-		height: 96px;
-		margin: -48px 0 0 -48px;
-		z-index: 4;
-		fill: var(--accent);
-		filter: drop-shadow(0 4px 18px rgba(0, 0, 0, 0.45));
-		animation: pop 0.55s ease-out forwards;
-		pointer-events: none;
-	}
-
-	@keyframes pop {
-		0% {
-			transform: scale(0.2);
-			opacity: 0;
-		}
-		35% {
-			transform: scale(1.25);
-			opacity: 1;
-		}
-		100% {
-			transform: scale(1.05);
-			opacity: 0;
-		}
-	}
-
 	.overlay {
 		position: absolute;
 		left: 0;
 		right: 76px;
-		bottom: calc(var(--safe-bottom) + 20px);
+		bottom: calc(var(--safe-bottom) + 72px);
 		z-index: 2;
 		padding: 0 16px;
 		color: #fff;
@@ -293,7 +245,7 @@
 	.rail {
 		position: absolute;
 		right: 10px;
-		bottom: calc(var(--safe-bottom) + 20px);
+		bottom: calc(var(--safe-bottom) + 72px);
 		z-index: 3;
 		display: flex;
 		flex-direction: column;

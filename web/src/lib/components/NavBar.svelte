@@ -12,7 +12,9 @@
 	let menuOpen = $state(false);
 
 	const pathname: string = $derived(page.url.pathname);
-	const hidden = $derived(pathname === '/login' || pathname === '/register');
+	const hidden = $derived(
+		pathname === '/login' || pathname === '/register' || pathname.startsWith('/upload')
+	);
 	const user = $derived($sessionUser);
 	const unread = $derived($unreadCount);
 
@@ -65,6 +67,7 @@
 
 	async function logout(): Promise<void> {
 		menuOpen = false;
+		if (!confirm('Log out?')) return;
 		try {
 			await apiPost('/auth/logout');
 		} catch {

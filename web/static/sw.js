@@ -3,7 +3,7 @@
 
 /* Bump on every deploy so activate() purges the previous cache (it deletes
    any cache whose name !== CACHE), clearing stale hashed /_app/ chunks. */
-const CACHE = 'toottok-v2';
+const CACHE = 'toottok-v3';
 const SHELL = '/index.html';
 const PRECACHE = [SHELL, '/manifest.webmanifest', '/icon.svg'];
 

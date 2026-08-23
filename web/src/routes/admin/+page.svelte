@@ -8,7 +8,7 @@
 	interface MeResponse {
 		username: string;
 		is_admin?: boolean;
-		csrf?: string;
+		csrf_token?: string;
 	}
 
 	interface AdminReport {
@@ -88,7 +88,7 @@
 		try {
 			const me = await apiGet<MeResponse>('/accounts/me');
 			if (me?.username) {
-				if (me.csrf) setCsrf(me.csrf);
+				if (me.csrf_token) setCsrf(me.csrf_token);
 				applyMe(me);
 			} else {
 				sessionUser.set(null);

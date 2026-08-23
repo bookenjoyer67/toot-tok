@@ -18,7 +18,7 @@
 		display_name?: string;
 		avatar_path?: string | null;
 		is_admin?: boolean;
-		csrf?: string;
+		csrf_token?: string;
 	}
 
 	let booted = $state(false);
@@ -42,8 +42,8 @@
 		try {
 			const me = await apiGet<MeResponse>('/accounts/me');
 			if (me?.username) {
-				if (me.csrf) setCsrf(me.csrf);
-				sessionUser.set({ username: me.username, csrf: me.csrf ?? '', isAdmin: me.is_admin ?? false });
+				if (me.csrf_token) setCsrf(me.csrf_token);
+				sessionUser.set({ username: me.username, csrf: me.csrf_token ?? '', isAdmin: me.is_admin ?? false });
 				activeKind = 'following';
 			}
 		} catch {
@@ -208,6 +208,8 @@
 		justify-content: center;
 		gap: 6px;
 		padding-top: calc(var(--safe-top) + 12px);
+		padding-left: 16px;
+		padding-right: 92px;
 		pointer-events: none;
 	}
 
@@ -267,7 +269,7 @@
 
 	.more {
 		position: fixed;
-		bottom: calc(var(--safe-bottom) + 14px);
+		bottom: calc(var(--safe-bottom) + 72px);
 		left: 50%;
 		transform: translateX(-50%);
 		z-index: 40;
