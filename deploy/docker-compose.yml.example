@@ -1,12 +1,11 @@
-# TootTok LAN deployment (Alpine homelab) — dev/test profile.
-# LAN-only HTTP by owner decision (no domain/cloudflare). Federation needs
-# public HTTPS later — swap caddy config then; compose structure stays.
+# TootTok compose example — copy to docker-compose.yml and adjust.
+# The live docker-compose.yml is gitignored (may hold local tweaks).
 services:
   db:
     image: postgres:18-alpine
     environment:
       POSTGRES_USER: toottok
-      POSTGRES_PASSWORD: toottok
+      POSTGRES_PASSWORD: change-me
       POSTGRES_DB: toottok_dev
     volumes:
       # postgres:18 image expects the mount at the parent; it places data in
@@ -24,21 +23,21 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
     environment:
-      DATABASE_URL: postgres://toottok:toottok@db:5432/toottok_dev
+      DATABASE_URL: postgres://toottok:change-me@db:5432/toottok_dev
       TOOTTOK_BIND: 0.0.0.0:8080
       TOOTTOK_MEDIA_DIR: /data/media
+      TOOTTOK_DOMAIN: toottok.example
     depends_on:
       db:
         condition: service_healthy
     ports:
-      # 8080 is owned by the komun.buzz nginx frontend on this box.
+      # Pick a host port free on your box (8080 may be taken by other apps).
       - "8088:8080"
     volumes:
       - media:/data/media
-      # Prebuilt frontend overrides the image copy (iterating on web changes
-      # without a full image rebuild). Compose resolves ./ relative to the
-      # compose file's dir — the repo root is one up from deploy/.
-      - ../web/build:/usr/local/share/toottok/web:ro
+      # Optional: override the image's built frontend with a local build
+      # while iterating on web changes. Resolves relative to THIS file's dir.
+      # - ../web/build:/usr/local/share/toottok/web:ro
 
 volumes:
   pgdata:

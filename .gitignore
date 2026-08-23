@@ -6,3 +6,8 @@
 /.pg
 *.db
 .env
+
+# local/private artifacts (not tracked)
+/docs
+/toottok.toml
+/deploy/docker-compose.yml
