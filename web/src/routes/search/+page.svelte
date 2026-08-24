@@ -134,6 +134,10 @@
 	}
 
 	const actorKey = (a: ActorHit, i: number) => `${a.username}@${a.domain ?? ''}-${i}`;
+	const actorHref = (a: ActorHit): string => {
+		const base = `/profile/${encodeURIComponent(a.username)}`;
+		return a.domain && a.domain !== 'local' ? `${base}?domain=${encodeURIComponent(a.domain)}` : base;
+	};
 	const tagKey = (t: TagHit, i: number) => `${tagName(t)}-${i}`;
 	const clipKey = (c: ClipHit, i: number) => `${c.id ?? 'clip'}-${i}`;
 </script>
@@ -179,7 +183,7 @@
 				<ul class="list">
 					{#each actors as a, i (actorKey(a, i))}
 						<li class="item actor">
-							<a class="actor-link" href="/profile/{a.username}">
+							<a class="actor-link" href={actorHref(a)}>
 								{#if a.avatar_path}
 									<img class="avatar" src={a.avatar_path} alt="" loading="lazy" />
 								{:else}

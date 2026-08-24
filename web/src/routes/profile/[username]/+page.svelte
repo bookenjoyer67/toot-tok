@@ -6,6 +6,11 @@
 	import type { Clip, FeedResponse, Profile, ProfileResponse } from '$lib/types';
 
 	const username = $derived(page.params.username ?? '');
+	const domainParam = $derived(
+		typeof page.url.searchParams.get('domain') === 'string'
+			? page.url.searchParams.get('domain')
+			: null
+	);
 
 	let profile = $state<ProfileResponse | null>(null);
 	let loading = $state(true);
@@ -13,10 +18,12 @@
 
 	$effect(() => {
 		const u = username;
+		const dom = domainParam;
 		profile = null;
 		loadError = null;
 		loading = true;
-		apiGet<ProfileResponse>(`/profiles/${encodeURIComponent(u)}`)
+		const qs = dom ? `?domain=${encodeURIComponent(dom)}` : '';
+		apiGet<ProfileResponse>(`/profiles/${encodeURIComponent(u)}${qs}`)
 			.then((data) => {
 				// API nests the actor: { actor: {...}, clips: [...], counts... }
 				const nested = data as ProfileResponse & { actor?: Profile };
