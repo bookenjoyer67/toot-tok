@@ -253,6 +253,37 @@ pub async fn discover_feed(
     }
 }
 
+/// GET /api/v1/feed/local — newest public clips from LOCAL actors only
+/// (fediverse "local timeline").
+pub async fn local_feed(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<FeedParams>,
+) -> Response {
+    let _ = auth;
+    let Some(pool) = &state.pool else {
+        return problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database unavailable",
+            "database is not configured",
+        );
+    };
+    let (before_created_at, before_id) = match cursor_keyset(&params) {
+        Ok(pair) => pair,
+        Err(resp) => return resp,
+    };
+    let limit = feed_limit(&params);
+
+    match feed::local_feed(pool, before_created_at, before_id, limit).await {
+        Ok(rows) => render_feed(pool, rows, limit).await,
+        Err(e) => problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database error",
+            format!("{e}"),
+        ),
+    }
+}
+
 /// GET /api/v1/tags/{tag}/clips — public clips carrying the hashtag, same
 /// feed-card shape and keyset pagination as the discover feed.
 #[allow(clippy::result_large_err)]

@@ -19,6 +19,7 @@ use toottok_db::announce::Announce;
 use toottok_db::clip::Clip;
 use toottok_db::comment::Comment;
 use toottok_db::follow::Follow;
+use toottok_db::feed;
 use toottok_db::job::Job;
 use toottok_db::like::Like;
 use toottok_db::settings::Setting;
@@ -479,4 +480,72 @@ async fn comment_like_announce_happy_paths() {
         .unwrap()
         .expect("announce should be fetched");
     assert_eq!(fetched_announce.actor_id, actor.id);
+}
+
+#[tokio::test]
+async fn local_feed_excludes_remote_actors() {
+    let _guard = test_lock().lock().await;
+    let Some(pool) = setup().await else {
+        return;
+    };
+
+    // Local author with a ready clip.
+    let local_actor = make_actor(&pool, "gina").await;
+    Clip::create_local(
+        &pool,
+        local_actor.id,
+        "https://toot.local/clips/gina",
+        None,
+        "public",
+        "ready",
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Remote actor (domain set) with a cached remote clip.
+    let remote_actor = make_actor_full(
+        &pool,
+        "faraway",
+        Some("remote.example"),
+        "https://remote.example/users/faraway",
+    )
+    .await;
+    Clip::create_remote(
+        &pool,
+        remote_actor.id,
+        "https://remote.example/videos/9",
+        None,
+        Some(1.0),
+        Some(720),
+        Some(1280),
+        "https://remote.example/videos/9/720.mp4",
+        false,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Local timeline: only the local author's clip.
+    let local_rows = feed::local_feed(&pool, None, None, 20).await.unwrap();
+    assert_eq!(local_rows.len(), 1, "local timeline must exclude remote actors");
+    assert_eq!(local_rows[0].username, "gina");
+    assert!(local_rows[0].domain.is_none());
+
+    // Federated timeline: both.
+    let all_rows = feed::discover_feed(&pool, None, None, 20).await.unwrap();
+    assert_eq!(all_rows.len(), 2, "discover includes local + remote");
+
+    // Keyset cursor still works on the local feed.
+    let first = &local_rows[0];
+    let paged = feed::local_feed(
+        &pool,
+        Some(first.clip_created_at),
+        Some(first.id),
+        20,
+    )
+    .await
+    .unwrap();
+    assert!(paged.is_empty(), "cursor past the single clip yields nothing");
 }

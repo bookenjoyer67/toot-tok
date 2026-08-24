@@ -115,6 +115,55 @@ pub async fn discover_feed(
     feed_page(pool, None, before_created_at, before_id, limit).await
 }
 
+/// Newest-first public clips from LOCAL actors only (`actors.domain IS NULL`)
+/// — the fediverse "local timeline", same keyset pagination as
+/// [`discover_feed`].
+pub async fn local_feed(
+    pool: &sqlx::PgPool,
+    before_created_at: Option<DateTime<Utc>>,
+    before_id: Option<i64>,
+    limit: i64,
+) -> Result<Vec<FeedClipRow>, DbError> {
+    feed_page_local(pool, before_created_at, before_id, limit).await
+}
+
+/// Shared page fetcher for the local timeline. Identical to [`feed_page`]
+/// without the follow join, plus the `a.domain IS NULL` local-actor filter.
+async fn feed_page_local(
+    pool: &sqlx::PgPool,
+    before_created_at: Option<DateTime<Utc>>,
+    before_id: Option<i64>,
+    limit: i64,
+) -> Result<Vec<FeedClipRow>, DbError> {
+    let has_cursor = before_created_at.is_some() && before_id.is_some();
+
+    let mut sql = String::from(
+        "SELECT c.id, c.ap_id, c.caption_html, c.duration_s, c.width, c.height, \
+         c.like_count, c.comment_count, c.share_count, c.created_at AS clip_created_at, \
+         c.actor_id, a.username, a.display_name, a.avatar_path, a.domain, \
+         c.remote_media_url \
+         FROM clips c JOIN actors a ON a.id = c.actor_id \
+         WHERE c.deleted_at IS NULL AND c.visibility = 'public' \
+         AND a.suspended_at IS NULL AND a.deleted_at IS NULL \
+         AND (c.status = 'ready' OR c.origin = 'remote') \
+         AND a.domain IS NULL",
+    );
+
+    if has_cursor {
+        sql.push_str(" AND (c.created_at, c.id) < ($1, $2)");
+    }
+    sql.push_str(&format!(
+        " ORDER BY c.created_at DESC, c.id DESC LIMIT ${}",
+        if has_cursor { 3 } else { 1 }
+    ));
+
+    let mut q = sqlx::query_as::<_, FeedClipRow>(&sql);
+    if has_cursor {
+        q = q.bind(before_created_at).bind(before_id);
+    }
+    Ok(q.bind(limit).fetch_all(pool).await?)
+}
+
 /// Newest-first public clips tagged `tag` (citext match, input lowercased),
 /// same keyset pagination as [`discover_feed`]. Feeds GET
 /// /api/v1/tags/{tag}/clips.

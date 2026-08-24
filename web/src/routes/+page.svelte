@@ -28,7 +28,7 @@
 	let loadError = $state<string | null>(null);
 	let scroller: HTMLDivElement | undefined = $state();
 	let commentsClip: Clip | null = $state(null);
-	const inflightByKind: Record<FeedKind, boolean> = { following: false, discover: false };
+	const inflightByKind: Record<FeedKind, boolean> = { following: false, local: false, discover: false };
 
 	const cache = $derived($feedCache);
 	const items = $derived(cache[activeKind].items);
@@ -65,7 +65,12 @@
 		loadingMore = true;
 		loadError = null;
 		try {
-			const base = kind === 'following' ? '/feed/following' : '/feed/discover';
+			const base =
+				kind === 'following'
+					? '/feed/following'
+					: kind === 'local'
+						? '/feed/local'
+						: '/feed/discover';
 			const qs = cursorParam ? `?cursor=${encodeURIComponent(cursorParam)}` : '';
 			const res = await apiGet<FeedResponse>(`${base}${qs}`);
 			appendFeed(kind, res.items ?? [], res.next_cursor ?? null);
@@ -156,10 +161,13 @@
 
 <div class="tabs">
 	<button class:active={activeKind === 'following'} onclick={() => switchKind('following')}>
-		Following
+		Home
+	</button>
+	<button class:active={activeKind === 'local'} onclick={() => switchKind('local')}>
+		Local
 	</button>
 	<button class:active={activeKind === 'discover'} onclick={() => switchKind('discover')}>
-		Discover
+		Federated
 	</button>
 </div>
 

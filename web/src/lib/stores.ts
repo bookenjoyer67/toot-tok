@@ -29,7 +29,7 @@ export function applyMe(me: MePayload): void {
 	});
 }
 
-export type FeedKind = 'following' | 'discover';
+export type FeedKind = 'following' | 'local' | 'discover';
 
 export interface FeedState {
 	items: Clip[];
@@ -101,6 +101,7 @@ export function savePrefs(next: Prefs): void {
 
 export const feedCache = writable<Record<FeedKind, FeedState>>({
 	following: emptyFeed(),
+	local: emptyFeed(),
 	discover: emptyFeed()
 });
 
@@ -116,7 +117,7 @@ export function appendFeed(kind: FeedKind, items: Clip[], nextCursor: string | n
 }
 
 export function resetFeeds(): void {
-	feedCache.set({ following: emptyFeed(), discover: emptyFeed() });
+	feedCache.set({ following: emptyFeed(), local: emptyFeed(), discover: emptyFeed() });
 }
 
 export function bumpCommentCount(clipId: string): void {

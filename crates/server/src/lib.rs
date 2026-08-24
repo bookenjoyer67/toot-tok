@@ -195,6 +195,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/v1/accounts/me/avatar", post(accounts::avatar))
         .route("/api/v1/feed/following", get(social::following_feed))
         .route("/api/v1/feed/discover", get(social::discover_feed))
+        .route("/api/v1/feed/local", get(social::local_feed))
         .route("/api/v1/feed/trending", get(social::trending_feed))
         .route("/api/v1/tags/trending", get(social::trending_tags))
         .route("/api/v1/sounds/{id}", get(social::sound_detail))
