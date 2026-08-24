@@ -131,6 +131,79 @@ pub async fn fetch_remote_actor(
     Ok(row)
 }
 
+/// Resolve a remote actor from a handle (`user@domain`, with optional leading
+/// `@` or full `@user@domain`, or a bare `user@domain`), via WebFinger. On a
+/// hit this fetches + caches the actor (egress-guarded) and returns its row —
+/// the same path `POST /follows` uses. Returns `Ok(None)` for a handle that
+/// does not look remote or that cannot be resolved.
+pub async fn resolve_remote_actor_by_handle(
+    pool: &PgPool,
+    guard: &EgressGuard,
+    handle: &str,
+) -> Result<Option<Actor>, Error> {
+    let raw = handle.trim().trim_start_matches('@');
+    let (name, domain) = match raw.split_once('@') {
+        Some(nd) if !nd.0.is_empty() && !nd.1.is_empty() => nd,
+        _ => return Ok(None),
+    };
+
+    // A bare bare-domain handle (no dot) is almost always a local-style
+    // miss rather than a real remote webfinger target; let the caller fall
+    // through. Keep it permissive for `.test`/loopback rigs.
+    let webfinger = format!(
+        "https://{domain}/.well-known/webfinger?resource=acct:{name}@{domain}"
+    );
+    let url = match Url::parse(&webfinger) {
+        Ok(u) => u,
+        Err(_) => return Ok(None),
+    };
+    if url.scheme() != "https" {
+        return Ok(None);
+    }
+
+    let client = match guard.client_for(&url).await {
+        Ok(c) => c,
+        Err(_) => return Ok(None),
+    };
+    let resp = match client
+        .get(url.as_str())
+        .header("accept", "application/jrd+json, application/json")
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => r,
+        _ => return Ok(None),
+    };
+    let body: Value = match resp.json().await {
+        Ok(b) => b,
+        Err(_) => return Ok(None),
+    };
+    let links = body
+        .get("links")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    // Standard WebFinger `self` link carries the ActivityPub profile URL.
+    for link in links {
+        if link.get("rel").and_then(Value::as_str) != Some("self") {
+            continue;
+        }
+        let Some(href) = link.get("href").and_then(Value::as_str) else {
+            continue;
+        };
+        let Ok(actor_url) = Url::parse(href) else {
+            continue;
+        };
+        if actor_url.scheme() == "https" || url.host_str() == Some("localhost") {
+            match fetch_remote_actor(pool, guard, &actor_url).await {
+                Ok(a) => return Ok(Some(a)),
+                Err(_) => return Ok(None),
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// ── HTTP document builders (webfinger / nodeinfo / collections) ─────────────
 /// JRD for `/.well-known/webfinger`: resolve to `url`, advertising both an HTML
 /// profile page and the ActivityPub `self` link.

@@ -1311,7 +1311,7 @@ pub async fn search(State(state): State<AppState>, Query(params): Query<SearchPa
         .await
         {
             Ok(rows) => {
-                let actors: Vec<Value> = rows
+                let mut actors: Vec<Value> = rows
                     .iter()
                     .map(|a| {
                         json!({
@@ -1322,6 +1322,33 @@ pub async fn search(State(state): State<AppState>, Query(params): Query<SearchPa
                         })
                     })
                     .collect();
+                // No cached hit — try resolving a remote handle
+                // (`user@domain` / `@user@domain`) via WebFinger, like
+                // Mastodon/Akkoma do at query time. The resolved actor is
+                // fetched + cached, so the follow button works immediately.
+                if actors.is_empty() && (q.contains('@')) {
+                    let handle = q.trim().trim_start_matches('@');
+                    match toottok_federation::resolve_remote_actor_by_handle(
+                        pool,
+                        &state.egress,
+                        handle,
+                    )
+                    .await
+                    {
+                        Ok(Some(a)) => {
+                            actors.push(json!({
+                                "username": a.username,
+                                "display_name": a.display_name,
+                                "domain": a.domain,
+                                "avatar_path": a.avatar_path,
+                            }));
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            tracing::warn!(error = %e, "remote actor resolve failed");
+                        }
+                    }
+                }
                 out.insert("actors".into(), Value::Array(actors));
             }
             Err(e) => {
