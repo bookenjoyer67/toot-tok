@@ -39,7 +39,7 @@ use crate::error::Error;
 const EXPIRES_AFTER: Duration = Duration::from_secs(60 * 60);
 
 static SIGN_CONFIG: LazyLock<Config<DefaultSpawner>> =
-    LazyLock::new(|| Config::new().set_expiration(EXPIRES_AFTER));
+    LazyLock::new(|| Config::new().mastodon_compat().set_expiration(EXPIRES_AFTER));
 
 /// Sign `body` as a POST from `actor_id` (using its private key). The returned
 /// request carries `Signature`, `Digest`, `Date`, `Host`, and `Content-Type`.

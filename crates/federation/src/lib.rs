@@ -38,6 +38,10 @@ pub async fn build_config(data: FederationData) -> Result<FederationConfig<Feder
     let config = FederationConfig::builder()
         .domain(data.domain.clone())
         .signed_fetch_actor(&instance)
+        // Draft-10 signature shape ((request-target) host date, no
+        // (created)/(expires) pseudo-headers) — what Loops' verifier and most
+        // PHP/legacy fediverse software actually check.
+        .http_signature_compat(true)
         .app_data(data.clone())
         .debug(data.allow_loopback)
         // Route the crate's OWN outbound fetches (signature keyId derefs,
