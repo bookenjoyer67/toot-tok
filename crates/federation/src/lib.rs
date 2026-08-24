@@ -131,6 +131,20 @@ pub async fn fetch_remote_actor(
     Ok(row)
 }
 
+/// Split a remote handle into `(name, domain)`. Accepts `user@domain`,
+/// `@user@domain`, and (defensively) `@user@domain@extra` by taking only the
+/// first `@` as the separator. Returns `None` for bare usernames, empty
+/// parts, or non-`@` queries — those stay local-style.
+fn parse_remote_handle(handle: &str) -> Option<(&str, &str)> {
+    let raw = handle.trim().trim_start_matches('@');
+    let (name, domain) = raw.split_once('@')?;
+    let domain = domain.trim();
+    if name.is_empty() || domain.is_empty() {
+        return None;
+    }
+    Some((name, domain))
+}
+
 /// Resolve a remote actor from a handle (`user@domain`, with optional leading
 /// `@` or full `@user@domain`, or a bare `user@domain`), via WebFinger. On a
 /// hit this fetches + caches the actor (egress-guarded) and returns its row —
@@ -141,15 +155,10 @@ pub async fn resolve_remote_actor_by_handle(
     guard: &EgressGuard,
     handle: &str,
 ) -> Result<Option<Actor>, Error> {
-    let raw = handle.trim().trim_start_matches('@');
-    let (name, domain) = match raw.split_once('@') {
-        Some(nd) if !nd.0.is_empty() && !nd.1.is_empty() => nd,
-        _ => return Ok(None),
+    let Some((name, domain)) = parse_remote_handle(handle) else {
+        return Ok(None);
     };
 
-    // A bare bare-domain handle (no dot) is almost always a local-style
-    // miss rather than a real remote webfinger target; let the caller fall
-    // through. Keep it permissive for `.test`/loopback rigs.
     let webfinger = format!(
         "https://{domain}/.well-known/webfinger?resource=acct:{name}@{domain}"
     );
@@ -262,3 +271,40 @@ pub fn ordered_collection_page(id: &Url, total_items: usize, items: Vec<Value>) 
         },
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_remote_handle;
+
+    #[test]
+    fn parses_remote_handles() {
+        assert_eq!(
+            parse_remote_handle("dansup@loops.video"),
+            Some(("dansup", "loops.video"))
+        );
+        assert_eq!(
+            parse_remote_handle("@dansup@loops.video"),
+            Some(("dansup", "loops.video"))
+        );
+        assert_eq!(
+            parse_remote_handle("  @dansup@loops.video  "),
+            Some(("dansup", "loops.video"))
+        );
+        // First `@` separates name from domain; the rest stays in domain.
+        assert_eq!(
+            parse_remote_handle("@a@b@c"),
+            Some(("a", "b@c"))
+        );
+    }
+
+    #[test]
+    fn rejects_non_remote_handles() {
+        assert_eq!(parse_remote_handle("dansup"), None);
+        assert_eq!(parse_remote_handle("@dansup"), None);
+        assert_eq!(parse_remote_handle("@"), None);
+        assert_eq!(parse_remote_handle("@dansup@"), None);
+        assert_eq!(parse_remote_handle("@dansup@   "), None);
+        assert_eq!(parse_remote_handle(""), None);
+    }
+}
+
