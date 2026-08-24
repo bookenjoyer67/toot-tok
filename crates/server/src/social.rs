@@ -15,12 +15,13 @@ use toottok_db::clip::Clip;
 use toottok_db::comment::Comment;
 use toottok_db::error::DbError;
 use toottok_db::feed::{self, FeedClipRow};
+use toottok_db::follow::Follow;
 use toottok_db::media_asset::MediaAsset;
 use toottok_federation::note::strip_html_tags;
 use uuid::Uuid;
 
 use crate::problem::problem;
-use crate::session::AuthUser;
+use crate::session::{AuthUser, OptionalAuthUser};
 use crate::AppState;
 
 const FEED_DEFAULT_LIMIT: i64 = 20;
@@ -38,7 +39,9 @@ const REPORT_BODY_MAX_CHARS: usize = 2000;
 /// Build one feed-card JSON object from a [`FeedClipRow`], resolving media
 /// URLs: local clips point at their best ready rendition (falling back to the
 /// original upload), remote clips hot-link `remote_media_url`. `poster_url`
-/// is present when a poster asset exists.
+/// is present when a poster asset exists. Sound attribution is fetched
+/// separately (nullable, cheap indexed lookup) so the row struct stays a
+/// plain SELECT mapping.
 async fn feed_item(pool: &sqlx::PgPool, row: &FeedClipRow) -> Result<Value, DbError> {
     let mut asset_url = None;
     let mut poster_url = None;
@@ -77,6 +80,16 @@ async fn feed_item(pool: &sqlx::PgPool, row: &FeedClipRow) -> Result<Value, DbEr
         }
     }
 
+    let sound = sqlx::query_as::<_, (i64, String)>(
+        "SELECT s.id, s.title FROM clips c JOIN sounds s ON s.id = c.sound_id \
+         WHERE c.id = $1",
+    )
+    .bind(row.id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
     Ok(json!({
         "id": row.id,
         "ap_id": row.ap_id,
@@ -86,8 +99,11 @@ async fn feed_item(pool: &sqlx::PgPool, row: &FeedClipRow) -> Result<Value, DbEr
         "height": row.height,
         "like_count": row.like_count,
         "comment_count": row.comment_count,
+        "share_count": row.share_count,
         "created_at": row.clip_created_at,
+        "sound": sound.map(|(id, title)| json!({ "id": id, "title": title })),
         "author": {
+            "actor_id": row.actor_id,
             "username": row.username,
             "display_name": row.display_name,
             "avatar_path": row.avatar_path,
@@ -265,6 +281,97 @@ pub async fn tag_clips(
             "database error",
             format!("{e}"),
         ),
+    }
+}
+
+/// GET /api/v1/feed/trending — engagement-weighted, recency-decayed clips
+/// for the Discover page grid.
+pub async fn trending_feed(State(state): State<AppState>, auth: AuthUser) -> Response {
+    let _ = auth;
+    let Some(pool) = &state.pool else {
+        return problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database unavailable",
+            "database is not configured",
+        );
+    };
+    match feed::trending(pool, 60).await {
+        Ok(rows) => {
+            let n = rows.len() as i64;
+            render_feed(pool, rows, n).await
+        }
+        Err(e) => problem(StatusCode::INTERNAL_SERVER_ERROR, "database error", format!("{e}")),
+    }
+}
+
+/// GET /api/v1/tags/trending — hottest hashtags over the last 14 days.
+pub async fn trending_tags(State(state): State<AppState>) -> Response {
+    let Some(pool) = &state.pool else {
+        return problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database unavailable",
+            "database is not configured",
+        );
+    };
+    match feed::trending_tags(pool, 12).await {
+        Ok(rows) => {
+            let items: Vec<Value> = rows
+                .into_iter()
+                .map(|(tag, uses)| json!({ "tag": tag, "uses": uses }))
+                .collect();
+            Json(json!({ "items": items })).into_response()
+        }
+        Err(e) => problem(StatusCode::INTERNAL_SERVER_ERROR, "database error", format!("{e}")),
+    }
+}
+
+/// GET /api/v1/sounds/{id} — sound card.
+pub async fn sound_detail(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Response {
+    let Some(pool) = &state.pool else {
+        return problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database unavailable",
+            "database is not configured",
+        );
+    };
+    match toottok_db::sound::fetch(pool, id).await {
+        Ok(Some(s)) => Json(json!({
+            "id": s.id,
+            "title": s.title,
+            "author": s.author_username,
+            "clip_count": s.clip_count,
+        }))
+        .into_response(),
+        Ok(None) => problem(StatusCode::NOT_FOUND, "sound not found", format!("no sound {id}")),
+        Err(e) => problem(StatusCode::INTERNAL_SERVER_ERROR, "database error", format!("{e}")),
+    }
+}
+
+/// GET /api/v1/sounds/{id}/clips — feed-card page of clips using the sound.
+#[allow(clippy::result_large_err)]
+pub async fn sound_clips(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Query(params): Query<FeedParams>,
+) -> Response {
+    let Some(pool) = &state.pool else {
+        return problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database unavailable",
+            "database is not configured",
+        );
+    };
+    let (before_created_at, before_id) = match cursor_keyset(&params) {
+        Ok(pair) => pair,
+        Err(resp) => return resp,
+    };
+    let limit = feed_limit(&params);
+    match toottok_db::sound::clips_for_sound(pool, id, before_created_at, before_id, limit).await {
+        Ok(rows) => render_feed(pool, rows, limit).await,
+        Err(e) => problem(StatusCode::INTERNAL_SERVER_ERROR, "database error", format!("{e}")),
     }
 }
 
@@ -601,6 +708,76 @@ pub async fn unannounce_clip(
         Json(json!({ "announced": false, "share_count": share_count })),
     )
         .into_response()
+}
+
+// ---------------------------------------------------------------- bookmarks
+
+/// PUT /api/v1/clips/{id}/bookmark — save a clip for the viewer.
+pub async fn bookmark_clip(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<i64>,
+) -> Response {
+    let Some(pool) = &state.pool else {
+        return problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database unavailable",
+            "database is not configured",
+        );
+    };
+    if fetch_live_clip(pool, id).await.is_err() {
+        return problem(StatusCode::NOT_FOUND, "clip not found", format!("no live clip {id}"));
+    }
+    match toottok_db::bookmark::add(pool, id, auth.actor.id).await {
+        Ok(_) => (StatusCode::OK, Json(json!({ "bookmarked": true }))).into_response(),
+        Err(e) => problem(StatusCode::INTERNAL_SERVER_ERROR, "database error", format!("{e}")),
+    }
+}
+
+/// DELETE /api/v1/clips/{id}/bookmark — drop the viewer's saved clip.
+pub async fn unbookmark_clip(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<i64>,
+) -> Response {
+    let Some(pool) = &state.pool else {
+        return problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database unavailable",
+            "database is not configured",
+        );
+    };
+    match toottok_db::bookmark::remove(pool, id, auth.actor.id).await {
+        Ok(_) => (StatusCode::OK, Json(json!({ "bookmarked": false }))).into_response(),
+        Err(e) => problem(StatusCode::INTERNAL_SERVER_ERROR, "database error", format!("{e}")),
+    }
+}
+
+/// GET /api/v1/bookmarks — the viewer's saved clips, feed-card shaped.
+#[allow(clippy::result_large_err)]
+pub async fn list_bookmarks(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<FeedParams>,
+) -> Response {
+    let Some(pool) = &state.pool else {
+        return problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database unavailable",
+            "database is not configured",
+        );
+    };
+    let (before_created_at, before_id) = match cursor_keyset(&params) {
+        Ok(pair) => pair,
+        Err(resp) => return resp,
+    };
+    let limit = feed_limit(&params);
+
+    match toottok_db::bookmark::list(pool, auth.actor.id, before_created_at, before_id, limit).await
+    {
+        Ok(rows) => render_feed(pool, rows, limit).await,
+        Err(e) => problem(StatusCode::INTERNAL_SERVER_ERROR, "database error", format!("{e}")),
+    }
 }
 
 // ------------------------------------------------------------------ comments
@@ -1478,9 +1655,11 @@ struct ProfileActorRow {
 /// the profile owner's public clips, feed-card shaped, newest-first keyset.
 pub async fn profile_grid(
     State(state): State<AppState>,
+    auth: OptionalAuthUser,
     Path(username): Path<String>,
     Query(params): Query<ProfileParams>,
 ) -> Response {
+    let viewer = auth.0;
     let Some(pool) = &state.pool else {
         return problem(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1533,8 +1712,8 @@ pub async fn profile_grid(
 
     let mut sql = String::from(
         "SELECT c.id, c.ap_id, c.caption_html, c.duration_s, c.width, c.height, \
-         c.like_count, c.comment_count, c.created_at AS clip_created_at, \
-         a.username, a.display_name, a.avatar_path, a.domain, \
+         c.like_count, c.comment_count, c.share_count, c.created_at AS clip_created_at, \
+         c.actor_id, a.username, a.display_name, a.avatar_path, a.domain, \
          c.remote_media_url \
          FROM clips c JOIN actors a ON a.id = c.actor_id \
          WHERE c.deleted_at IS NULL AND c.visibility = 'public' \
@@ -1579,14 +1758,52 @@ pub async fn profile_grid(
         None
     };
 
+    let follower_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM follows WHERE target_actor_id = $1 AND state = 'accepted'",
+    )
+    .bind(actor.id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    let following_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM follows WHERE follower_actor_id = $1 AND state = 'accepted'",
+    )
+    .bind(actor.id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    let total_likes: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(like_count), 0) FROM clips \
+         WHERE actor_id = $1 AND deleted_at IS NULL",
+    )
+    .bind(actor.id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0);
+    let viewer_following = if let Some(viewer) = viewer.as_ref() {
+        Follow::fetch_by_pair(pool, viewer.actor.id, actor.id)
+            .await
+            .ok()
+            .flatten()
+            .map(|f| f.state == "accepted")
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
     Json(json!({
         "actor": {
+            "actor_id": actor.id,
             "username": actor.username,
             "display_name": actor.display_name,
             "domain": actor.domain,
             "avatar_path": actor.avatar_path,
             "summary": actor.summary,
         },
+        "follower_count": follower_count,
+        "following_count": following_count,
+        "likes_received": total_likes,
+        "is_following": viewer_following,
         "clips": items,
         "next_cursor": next_cursor,
     }))

@@ -25,12 +25,13 @@
 	let caption = $state('');
 	let cwEnabled = $state(false);
 	let cwText = $state('');
+	let soundTitle = $state('');
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 	let tab: 'edit' | 'text' | 'sound' | 'post' = $state('edit');
 
 	// ── voiceover / sound ────────────────────────────────────────────────
-	let voBlob: Blob | null = null;
+	let voBlob: Blob | null = $state(null);
 	let voUrl = $state<string | null>(null);
 	let voVolume = $state(1);
 	let voRecorder: MediaRecorder | null = null;
@@ -244,7 +245,8 @@
 			music: musicUrl ? { src: musicUrl, volume: musicVolume } : null,
 			coverTime: currentTime,
 			caption,
-			cwText: cwEnabled && cwText.trim() ? cwText.trim() : null
+			cwText: cwEnabled && cwText.trim() ? cwText.trim() : null,
+			soundTitle: soundTitle.trim() || null
 		};
 		onPost(manifest);
 	}
@@ -475,6 +477,15 @@
 				</button>
 			</div>
 			<span class="counter">{caption.length}/500</span>
+
+			<label class="label" for="sound-title">Sound</label>
+			<input
+				class="input"
+				id="sound-title"
+				maxlength="100"
+				bind:value={soundTitle}
+				placeholder={musicUrl || voBlob ? 'Name this sound (default: original)' : 'Optional sound name'}
+			/>
 
 			<label class="check">
 				<input type="checkbox" bind:checked={cwEnabled} />

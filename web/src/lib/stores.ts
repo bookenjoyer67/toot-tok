@@ -1,10 +1,17 @@
 import { writable } from 'svelte/store';
+import { apiGet } from './api';
 import type { Clip } from './types';
 
 export interface SessionUser {
 	username: string;
 	csrf: string;
 	isAdmin?: boolean;
+}
+
+export interface FollowedHandle {
+	/** Numeric actor id — needed by the unfollow endpoint. */
+	actorId: number;
+	domain: string | null;
 }
 
 export interface MePayload {
@@ -37,6 +44,60 @@ function emptyFeed(): FeedState {
 export const sessionUser = writable<SessionUser | null>(null);
 
 export const unreadCount = writable(0);
+
+/** username → { actorId, domain } for every accepted follow of the logged-in user. */
+export const followingMap = writable<Map<string, FollowedHandle>>(new Map());
+
+/** Hydrate the follow map once per login. Best-effort: failure leaves it empty. */
+export async function hydrateFollowing(): Promise<void> {
+	try {
+		const data = await apiGet<{ following?: { actor_id: number; username: string; domain: string | null }[] }>(
+			'/follows/mine'
+		);
+		const map = new Map<string, FollowedHandle>();
+		for (const row of data.following ?? []) {
+			map.set(row.username, { actorId: row.actor_id, domain: row.domain ?? null });
+		}
+		followingMap.set(map);
+	} catch {
+		followingMap.set(new Map());
+	}
+}
+
+export function clearFollowing(): void {
+	followingMap.set(new Map());
+}
+
+// ── playback preferences (localStorage-backed) ──────────────────────────────
+export interface Prefs {
+	autoplay: boolean;
+	defaultMuted: boolean;
+	dataSaver: boolean;
+}
+
+const PREFS_KEY = 'toottok-prefs';
+const PREFS_DEFAULTS: Prefs = { autoplay: true, defaultMuted: true, dataSaver: false };
+
+function loadPrefs(): Prefs {
+	try {
+		const raw = localStorage.getItem(PREFS_KEY);
+		if (raw) return { ...PREFS_DEFAULTS, ...(JSON.parse(raw) as Partial<Prefs>) };
+	} catch {
+		/* fresh install */
+	}
+	return { ...PREFS_DEFAULTS };
+}
+
+export const prefs = writable<Prefs>(loadPrefs());
+
+export function savePrefs(next: Prefs): void {
+	prefs.set(next);
+	try {
+		localStorage.setItem(PREFS_KEY, JSON.stringify(next));
+	} catch {
+		/* storage full/blocked — keep in-memory */
+	}
+}
 
 export const feedCache = writable<Record<FeedKind, FeedState>>({
 	following: emptyFeed(),

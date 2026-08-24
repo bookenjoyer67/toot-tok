@@ -58,6 +58,29 @@ body {
 	border: 0;
 }
 
+/* ---------- desktop wide mode (≥1024px) ----------
+   Phone-column feed centered on dark backdrop; bottom
+   tabbar becomes a floating pill. Shorts-style. */
+@media (min-width: 1024px) {
+	body {
+		background:
+			radial-gradient(1200px 800px at 50% -10%, #17171f, #000 70%);
+	}
+
+	.tabbar {
+		left: 50% !important;
+		right: auto !important;
+		transform: translateX(-50%);
+		bottom: 14px !important;
+		border-radius: 999px;
+		border: 1px solid rgba(255, 255, 255, 0.09);
+		padding-left: 10px;
+		padding-right: 10px;
+		max-width: 560px;
+		box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+	}
+}
+
 .btn {
 	display: inline-flex;
 	align-items: center;

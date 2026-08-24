@@ -2,7 +2,13 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { apiGet, apiPost, csrf } from '$lib/api';
-	import { resetFeeds, sessionUser, unreadCount } from '$lib/stores';
+	import {
+		clearFollowing,
+		hydrateFollowing,
+		resetFeeds,
+		sessionUser,
+		unreadCount
+	} from '$lib/stores';
 	import type { NotificationT } from '$lib/types';
 
 	interface NotificationsResponse {
@@ -20,6 +26,7 @@
 
 	const profileHref = $derived(user ? `/profile/${user.username}` : '/login');
 	const onFeed = $derived(pathname === '/');
+	const onDiscover = $derived(pathname.startsWith('/discover'));
 	const onUpload = $derived(pathname.startsWith('/upload'));
 	const onNotifs = $derived(pathname.startsWith('/notifications'));
 	const onProfile = $derived(pathname.startsWith('/profile'));
@@ -27,8 +34,10 @@
 	$effect(() => {
 		if (!user) {
 			unreadCount.set(0);
+			clearFollowing();
 			return;
 		}
+		void hydrateFollowing();
 		void refreshUnread();
 		window.addEventListener('focus', refreshUnread);
 		document.addEventListener('visibilitychange', refreshUnread);
@@ -75,6 +84,7 @@
 		}
 		csrf.token = null;
 		sessionUser.set(null);
+		clearFollowing();
 		resetFeeds();
 		unreadCount.set(0);
 		await goto('/login');
@@ -102,6 +112,7 @@
 				{#if menuOpen}
 					<div class="menu" role="menu">
 						<a role="menuitem" href={profileHref} onclick={closeMenu}>Profile</a>
+						<a role="menuitem" href="/settings" onclick={closeMenu}>Settings</a>
 						<button role="menuitem" onclick={logout}>Log out</button>
 					</div>
 				{/if}
@@ -118,6 +129,14 @@
 				<polyline points="9 22 9 12 15 12 15 22" />
 			</svg>
 			<span>Feed</span>
+		</a>
+
+		<a href="/discover" class="tab" class:active={onDiscover} aria-label="Discover" aria-current={onDiscover ? 'page' : undefined}>
+			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+				<circle cx="12" cy="12" r="10" />
+				<polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" />
+			</svg>
+			<span>Discover</span>
 		</a>
 
 		<a href="/upload" class="tab compose" class:active={onUpload} aria-label="Upload" aria-current={onUpload ? 'page' : undefined}>

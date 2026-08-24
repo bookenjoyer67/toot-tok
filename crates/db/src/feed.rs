@@ -17,7 +17,9 @@ pub struct FeedClipRow {
     pub height: Option<i32>,
     pub like_count: i64,
     pub comment_count: i64,
+    pub share_count: i64,
     pub clip_created_at: DateTime<Utc>,
+    pub actor_id: i64,
     pub username: String,
     pub display_name: Option<String>,
     pub avatar_path: Option<String>,
@@ -41,8 +43,8 @@ async fn feed_page(
 
     let mut sql = String::from(
         "SELECT c.id, c.ap_id, c.caption_html, c.duration_s, c.width, c.height, \
-         c.like_count, c.comment_count, c.created_at AS clip_created_at, \
-         a.username, a.display_name, a.avatar_path, a.domain, \
+         c.like_count, c.comment_count, c.share_count, c.created_at AS clip_created_at, \
+         c.actor_id, a.username, a.display_name, a.avatar_path, a.domain, \
          c.remote_media_url \
          FROM clips c JOIN actors a ON a.id = c.actor_id",
     );
@@ -126,8 +128,8 @@ pub async fn clips_by_tag(
     let has_cursor = before_created_at.is_some() && before_id.is_some();
     let mut sql = String::from(
         "SELECT c.id, c.ap_id, c.caption_html, c.duration_s, c.width, c.height, \
-         c.like_count, c.comment_count, c.created_at AS clip_created_at, \
-         a.username, a.display_name, a.avatar_path, a.domain, \
+         c.like_count, c.comment_count, c.share_count, c.created_at AS clip_created_at, \
+         c.actor_id, a.username, a.display_name, a.avatar_path, a.domain, \
          c.remote_media_url \
          FROM clips c \
          JOIN actors a ON a.id = c.actor_id \
@@ -154,4 +156,60 @@ pub async fn clips_by_tag(
         q = q.bind(before_created_at).bind(before_id);
     }
     Ok(q.bind(limit).fetch_all(pool).await?)
+}
+
+/// Trending clips: engagement-weighted, recency-decayed. Score =
+/// (likes + 3*comments + 5*shares) / hours_since_post^1.2. Simple v1
+/// ranking — no view counters exist yet. Returns feed-card rows.
+pub async fn trending(
+    pool: &sqlx::PgPool,
+    limit: i64,
+) -> Result<Vec<FeedClipRow>, DbError> {
+    Ok(sqlx::query_as::<_, FeedClipRow>(
+        r#"
+        SELECT c.id, c.ap_id, c.caption_html, c.duration_s, c.width, c.height,
+               c.like_count, c.comment_count, c.share_count,
+               c.created_at AS clip_created_at,
+               c.actor_id, a.username, a.display_name, a.avatar_path, a.domain,
+               c.remote_media_url
+        FROM clips c
+        JOIN actors a ON a.id = c.actor_id
+        WHERE c.deleted_at IS NULL AND c.visibility = 'public'
+          AND a.suspended_at IS NULL AND a.deleted_at IS NULL
+          AND (c.status = 'ready' OR c.origin = 'remote')
+          AND c.created_at > now() - interval '30 days'
+        ORDER BY POWER(
+                    (c.like_count + 3 * c.comment_count + 5 * c.share_count)::double precision
+                    / POWER(GREATEST(EXTRACT(EPOCH FROM (now() - c.created_at)) / 3600.0, 0.25), 1.2),
+                    1) DESC,
+                 c.created_at DESC
+        LIMIT $1
+        "#,
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Trending hashtags: most-tagged public clips over the last 14 days.
+pub async fn trending_tags(
+    pool: &sqlx::PgPool,
+    limit: i64,
+) -> Result<Vec<(String, i64)>, DbError> {
+    Ok(sqlx::query_as(
+        r#"
+        SELECT h.tag, COUNT(*) AS uses
+        FROM clip_hashtags ch
+        JOIN hashtags h ON h.id = ch.hashtag_id
+        JOIN clips c ON c.id = ch.clip_id
+        WHERE c.deleted_at IS NULL AND c.visibility = 'public'
+          AND c.created_at > now() - interval '14 days'
+        GROUP BY h.tag
+        ORDER BY uses DESC, h.tag ASC
+        LIMIT $1
+        "#,
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?)
 }

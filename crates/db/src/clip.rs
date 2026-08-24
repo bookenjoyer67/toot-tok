@@ -83,6 +83,20 @@ impl Clip {
         Ok(())
     }
 
+    /// Attach (or clear, with None) the sound reference on a clip.
+    pub async fn set_sound(
+        pool: &sqlx::PgPool,
+        clip_id: i64,
+        sound_id: Option<i64>,
+    ) -> Result<(), DbError> {
+        sqlx::query("UPDATE clips SET sound_id = $2, updated_at = now() WHERE id = $1")
+            .bind(clip_id)
+            .bind(sound_id)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
     /// Federated/moderation delete: tombstone timestamp + status flip. The row
     /// is kept (delete-wins gate for later Creates).
     pub async fn mark_deleted(pool: &sqlx::PgPool, id: i64) -> Result<Option<Self>, DbError> {

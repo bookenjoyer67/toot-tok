@@ -114,6 +114,7 @@
 			});
 			if (m.caption.trim()) form.append('caption_html', m.caption.trim());
 			if (m.cwText) form.append('cw_text', m.cwText);
+			if (m.soundTitle) form.append('sound_title', m.soundTitle);
 
 			form.append(
 				'edit_manifest',

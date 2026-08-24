@@ -1,9 +1,15 @@
 export interface Author {
+	actor_id?: number;
 	username: string;
 	display_name: string;
 	avatar_path: string | null;
 	domain: string;
 	url?: string | null;
+}
+
+export interface SoundRef {
+	id: number;
+	title: string;
 }
 
 export interface Clip {
@@ -15,7 +21,9 @@ export interface Clip {
 	height: number;
 	like_count: number;
 	comment_count: number;
+	share_count?: number;
 	created_at: string;
+	sound?: SoundRef | null;
 	author: Author;
 	asset_url?: string;
 	poster_url?: string;
@@ -29,11 +37,20 @@ export interface FeedResponse {
 export interface Profile {
 	// Backend /profiles/{username} actor payload: username, display_name,
 	// domain, avatar_path, summary (plain escaped text — render as TEXT).
+	actor_id?: number;
 	username: string;
 	display_name: string;
 	avatar_path: string | null;
 	domain: string | null;
 	summary?: string | null;
+}
+
+export interface ProfileResponse extends Profile {
+	clips?: Clip[];
+	follower_count?: number;
+	following_count?: number;
+	likes_received?: number;
+	is_following?: boolean;
 }
 
 export interface CommentT {

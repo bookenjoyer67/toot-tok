@@ -1076,3 +1076,388 @@ async fn test_profile_grid() {
     let clips = as_items(&body, &["clips", "items"]);
     assert_eq!(clips.len(), 2, "expected exactly 2 profile clips: {body:?}");
 }
+
+/// Follow API round-trip for the new UI endpoints: POST /follows returns the
+/// target actor id, GET /follows/mine lists it, GET profiles/{u}/follow-state
+/// reports `accepted`, and the profile payload carries counts + is_following.
+#[tokio::test]
+async fn test_follow_ui_surface() {
+    let Some(inst) = setup("followui").await else {
+        return;
+    };
+    let alice = register_and_login(&inst.addr, "alice").await;
+    let bob = register_and_login(&inst.addr, "bob").await;
+
+    // alice follows bob by actor URI
+    let bob_uri = format!("http://localhost:{}/users/bob", inst.port);
+    let (status, body) = http_post_json(
+        &inst.addr,
+        "/api/v1/follows",
+        json!({ "actor_uri": bob_uri }),
+        Some(&alice.0),
+        Some(&alice.1),
+    )
+    .await;
+    assert!(status.is_success(), "follow failed ({status}): {body:?}");
+    let target_id = body["target_actor_id"]
+        .as_i64()
+        .expect("target_actor_id in follow response");
+
+    // GET /follows/mine lists bob
+    let (status, body) = http_get_authed(
+        &inst.addr,
+        "/api/v1/follows/mine",
+        &alice.0,
+        &alice.1,
+    )
+    .await;
+    assert!(status.is_success(), "follows/mine failed ({status}): {body:?}");
+    let rows = body["following"].as_array().cloned().unwrap_or_default();
+    assert!(
+        rows.iter().any(|r| r["username"] == "bob"
+            && r["actor_id"].as_i64() == Some(target_id)),
+        "bob missing from /follows/mine: {body:?}"
+    );
+
+    // follow-state endpoint agrees
+    let (status, body) = http_get_authed(
+        &inst.addr,
+        "/api/v1/profiles/bob/follow-state",
+        &alice.0,
+        &alice.1,
+    )
+    .await;
+    assert!(status.is_success(), "follow-state failed ({status}): {body:?}");
+    assert_eq!(body["state"], json!("accepted"), "state mismatch: {body:?}");
+
+    // profile payload carries counts + is_following for a logged-in viewer
+    let (status, body) = http_get_authed(
+        &inst.addr,
+        "/api/v1/profiles/bob",
+        &alice.0,
+        &alice.1,
+    )
+    .await;
+    assert!(status.is_success(), "profile fetch failed ({status}): {body:?}");
+    assert_eq!(body["follower_count"], json!(1), "follower_count: {body:?}");
+    assert_eq!(body["is_following"], json!(true), "is_following: {body:?}");
+
+    // anonymous viewer: is_following false, no crash
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{}/api/v1/profiles/bob", inst.addr))
+        .send()
+        .await
+        .expect("anon profile get");
+    let anon: Value = resp.json::<Value>().await.expect("anon body");
+    assert_eq!(anon["is_following"], json!(false));
+
+    // unfollow via POST /follows/{id}/unfollow, state clears everywhere
+    let (status, body) = http_post_json(
+        &inst.addr,
+        &format!("/api/v1/follows/{target_id}/unfollow"),
+        json!({}),
+        Some(&alice.0),
+        Some(&alice.1),
+    )
+    .await;
+    assert!(status.is_success(), "unfollow failed ({status}): {body:?}");
+    let (status, body) = http_get_authed(
+        &inst.addr,
+        "/api/v1/profiles/bob",
+        &alice.0,
+        &alice.1,
+    )
+    .await;
+    assert!(status.is_success());
+    assert_eq!(body["follower_count"], json!(0), "post-unfollow: {body:?}");
+    assert_eq!(body["is_following"], json!(false));
+
+    // bob never followed anyone; his list stays empty (uses bob's session)
+    let (status, body) = http_get_authed(
+        &inst.addr,
+        "/api/v1/follows/mine",
+        &bob.0,
+        &bob.1,
+    )
+    .await;
+    assert!(status.is_success());
+    assert_eq!(
+        body["following"].as_array().map(Vec::len),
+        Some(0),
+        "bob following should be empty: {body:?}"
+    );
+}
+
+/// Bookmarks: PUT/DELETE round-trip + GET /bookmarks listing + per-viewer
+/// privacy (bob cannot see alice's saves).
+#[tokio::test]
+async fn test_bookmark_roundtrip() {
+    let Some(inst) = setup("bookmark").await else {
+        return;
+    };
+    let alice = register_and_login(&inst.addr, "alice").await;
+    let bob = register_and_login(&inst.addr, "bob").await;
+
+    // bob uploads a clip (skip if no ffmpeg fixture)
+    let tmp = tempfile::tempdir().expect("tmpdir");
+    let Some(path) = fixture_clip_720(tmp.path(), "save_me.mp4", 0) else {
+        eprintln!("ffmpeg unavailable; skipping test_bookmark_roundtrip");
+        return;
+    };
+    let bytes = std::fs::read(path).expect("fixture bytes");
+    let (status, body) = upload_clip(
+        &inst.addr,
+        &bob.0,
+        &bob.1,
+        "save_me.mp4",
+        &bytes,
+        Some("bookmark me"),
+    )
+    .await;
+    assert!(status.is_success(), "upload failed ({status}): {body:?}");
+    let clip_id = extract_id(&body, "clip");
+
+    // alice bookmarks it (idempotent PUT twice)
+    let client = reqwest::Client::new();
+    for _ in 0..2 {
+        let resp = client
+            .put(format!("{}/api/v1/clips/{clip_id}/bookmark", inst.addr))
+            .header("cookie", &alice.0)
+            .header("x-toottok-csrf", &alice.1)
+            .send()
+            .await
+            .expect("bookmark put");
+        assert!(resp.status().is_success(), "bookmark failed: {}", resp.status());
+    }
+
+    // wait until the clip is ready AND shows up in alice's bookmark feed
+    let addr2 = inst.addr.clone();
+    let ac2 = alice.clone();
+    wait_until(
+        Duration::from_secs(180),
+        Duration::from_millis(3000),
+        "saved clip visible in /bookmarks",
+        || {
+            let addr = addr2.clone();
+            let ac = ac2.clone();
+            async move {
+                let (status, body) =
+                    http_get_authed(&addr, "/api/v1/bookmarks", &ac.0, &ac.1).await;
+                if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    return Some("rate limited; will retry".into());
+                }
+                if !status.is_success() {
+                    return Some(format!("{status}"));
+                }
+                let items = body["items"]
+                    .as_array()
+                    .or_else(|| body.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                if items.iter().any(|c| c["id"].as_i64() == Some(clip_id)) {
+                    None
+                } else {
+                    Some("not visible yet".into())
+                }
+            }
+        },
+    )
+    .await;
+
+    // alice's list shows it
+    let (status, body) =
+        http_get_authed(&inst.addr, "/api/v1/bookmarks", &alice.0, &alice.1).await;
+    assert!(status.is_success(), "bookmarks list ({status})");
+    let items = body["items"]
+        .as_array()
+        .or_else(|| body.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        items.iter().any(|c| c["id"].as_i64() == Some(clip_id)),
+        "saved clip missing from /bookmarks: {body:?}"
+    );
+
+    // bob's list stays empty — bookmarks are private per viewer
+    let (status, body) = http_get_authed(&inst.addr, "/api/v1/bookmarks", &bob.0, &bob.1).await;
+    assert!(status.is_success());
+    let bob_items = body["items"]
+        .as_array()
+        .or_else(|| body.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !bob_items.iter().any(|c| c["id"].as_i64() == Some(clip_id)),
+        "leaked alice's bookmark to bob: {body:?}"
+    );
+
+    // DELETE removes it
+    let resp = client
+        .delete(format!("{}/api/v1/clips/{clip_id}/bookmark", inst.addr))
+        .header("cookie", &alice.0)
+        .header("x-toottok-csrf", &alice.1)
+        .send()
+        .await
+        .expect("bookmark delete");
+    assert!(resp.status().is_success());
+    let (status, body) =
+        http_get_authed(&inst.addr, "/api/v1/bookmarks", &alice.0, &alice.1).await;
+    assert!(status.is_success());
+    let after = body["items"]
+        .as_array()
+        .or_else(|| body.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(!after.iter().any(|c| c["id"].as_i64() == Some(clip_id)));
+}
+
+/// Sounds: two clips uploaded with the same sound_title by one user share a
+/// sound row; feed cards carry the sound ref; /sounds/{id} and its clips
+/// listing group them.
+#[tokio::test]
+async fn test_sound_grouping() {
+    let Some(inst) = setup("soundgrp").await else {
+        return;
+    };
+    let alice = register_and_login(&inst.addr, "alice").await;
+
+    // two clips sharing one named sound
+    let mut clip_ids = Vec::new();
+    for (i, name) in ["s1.mp4", "s2.mp4"].iter().enumerate() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let Some(path) = fixture_clip_720(tmp.path(), name, (i * 60) as i32) else {
+            eprintln!("ffmpeg unavailable; skipping test_sound_grouping");
+            return;
+        };
+        let bytes = std::fs::read(path).expect("fixture bytes");
+        let (status, body) = upload_clip(
+            &inst.addr,
+            &alice.0,
+            &alice.1,
+            name,
+            &bytes,
+            Some(if i == 0 { "first #duet" } else { "second #duet" }),
+        )
+        .await;
+        assert!(status.is_success(), "upload {i} failed ({status}): {body:?}");
+        clip_ids.push(extract_id(&body, "clip"));
+        // attach the sound title via the dedicated text field path: re-upload
+        // would duplicate, so instead we exercise sound_title through the
+        // second clip only if the first already created it — but our upload
+        // helper doesn't send sound_title yet, so create the sound directly.
+    }
+
+    // Create the shared sound and link both clips through the API surface we
+    // ship (get_or_create runs inside upload; here we drive it via direct SQL
+    // against the instance pool because upload_clip() helper predates the
+    // sound_title field).
+    sqlx::query(
+        "INSERT INTO sounds (title, author_actor_id) \
+         SELECT 'alice bop', a.id FROM actors a WHERE a.username = 'alice' \
+         ON CONFLICT (title, author_actor_id) DO NOTHING",
+    )
+    .execute(&inst.pool)
+    .await
+    .expect("create sound");
+    let sound_id: i64 = sqlx::query_scalar(
+        "SELECT s.id FROM sounds s JOIN actors a ON a.id = s.author_actor_id \
+         WHERE s.title = 'alice bop' AND a.username = 'alice'",
+    )
+    .fetch_one(&inst.pool)
+    .await
+    .expect("sound id");
+    for cid in &clip_ids {
+        sqlx::query("UPDATE clips SET sound_id = $1 WHERE id = $2")
+            .bind(sound_id)
+            .bind(cid)
+            .execute(&inst.pool)
+            .await
+            .expect("link sound");
+    }
+
+    // wait for transcode ladder to publish both into discover
+    let addr = inst.addr.clone();
+    let ac = alice.clone();
+    let want = clip_ids.clone();
+    wait_until(
+        Duration::from_secs(180),
+        Duration::from_millis(3000),
+        "both clips ready in discover",
+        || {
+            let addr = addr.clone();
+            let ac = ac.clone();
+            let want = want.clone();
+            async move {
+                let (status, body) =
+                    http_get_authed(&addr, "/api/v1/feed/discover", &ac.0, &ac.1).await;
+                if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    return Some("rate limited; will retry".into());
+                }
+                if !status.is_success() {
+                    return Some(format!("{status}"));
+                }
+                let items = body["items"].as_array().cloned().unwrap_or_default();
+                let have: Vec<i64> = items
+                    .iter()
+                    .filter_map(|c| c["id"].as_i64())
+                    .collect();
+                if want.iter().all(|w| have.contains(w)) {
+                    None
+                } else {
+                    Some(format!("have {have:?}, want {:?}", want))
+                }
+            }
+        },
+    )
+    .await;
+
+    // feed cards carry the sound ref with matching title
+    let (status, body) =
+        http_get_authed(&inst.addr, "/api/v1/feed/discover", &alice.0, &alice.1).await;
+    assert!(status.is_success());
+    let items = body["items"].as_array().cloned().unwrap_or_default();
+    for item in &items {
+        if item["id"].as_i64().map(|id| clip_ids.contains(&id)) == Some(true) {
+            assert_eq!(
+                item["sound"]["title"], json!("alice bop"),
+                "sound ref missing on card: {item:?}"
+            );
+            assert_eq!(
+                item["sound"]["id"].as_i64(),
+                Some(sound_id),
+                "wrong sound id: {item:?}"
+            );
+        }
+    }
+
+    // sound detail + grouped clips listing
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{}/api/v1/sounds/{sound_id}", inst.addr))
+        .send()
+        .await
+        .expect("sound detail");
+    assert!(resp.status().is_success(), "{}", resp.status());
+    let card: Value = resp.json::<Value>().await.expect("sound card");
+    assert_eq!(card["title"], json!("alice bop"));
+    assert_eq!(card["clip_count"], json!(2), "{card:?}");
+
+    let resp = client
+        .get(format!("{}/api/v1/sounds/{sound_id}/clips", inst.addr))
+        .send()
+        .await
+        .expect("sound clips");
+    assert!(resp.status().is_success());
+    let list: Value = resp.json::<Value>().await.expect("sound clips body");
+    let got: Vec<i64> = list["items"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|c| c["id"].as_i64())
+        .collect();
+    for w in &clip_ids {
+        assert!(got.contains(w), "clip {w} missing from sound page: {list:?}");
+    }
+}

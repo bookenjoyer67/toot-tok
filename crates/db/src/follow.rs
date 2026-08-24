@@ -16,6 +16,78 @@ pub struct Follow {
 }
 
 impl Follow {
+    /// Ids of actors `follower_actor_id` follows with state `accepted`.
+    /// Feeds the client-side "who do I follow" hydration for follow buttons.
+    pub async fn following_ids(
+        pool: &sqlx::PgPool,
+        follower_actor_id: i64,
+    ) -> Result<Vec<i64>, DbError> {
+        Ok(sqlx::query_scalar(
+            "SELECT target_actor_id FROM follows \
+             WHERE follower_actor_id = $1 AND state = 'accepted'",
+        )
+        .bind(follower_actor_id)
+        .fetch_all(pool)
+        .await?)
+    }
+
+    /// Accepted follows joined with the target actor's id + handle, so the
+    /// UI can map usernames → actor ids without extra round-trips.
+    pub async fn following_rows(
+        pool: &sqlx::PgPool,
+        follower_actor_id: i64,
+    ) -> Result<Vec<(i64, String, Option<String>)>, DbError> {
+        Ok(sqlx::query_as(
+            "SELECT a.id, a.username, a.domain FROM follows f \
+             JOIN actors a ON a.id = f.target_actor_id \
+             WHERE f.follower_actor_id = $1 AND f.state = 'accepted' \
+             AND a.deleted_at IS NULL AND a.suspended_at IS NULL",
+        )
+        .bind(follower_actor_id)
+        .fetch_all(pool)
+        .await?)
+    }
+
+    /// Local handles of everyone who follows `target_actor_id` (accepted),
+    /// newest follow first. Remote followers are skipped: their profiles are
+    /// not browsable here.
+    pub async fn follower_rows(
+        pool: &sqlx::PgPool,
+        target_actor_id: i64,
+        limit: i64,
+    ) -> Result<Vec<(i64, String)>, DbError> {
+        Ok(sqlx::query_as(
+            "SELECT a.id, a.username FROM follows f \
+             JOIN actors a ON a.id = f.follower_actor_id \
+             WHERE f.target_actor_id = $1 AND f.state = 'accepted' \
+             AND a.deleted_at IS NULL AND a.suspended_at IS NULL AND a.domain IS NULL \
+             ORDER BY f.created_at DESC, a.id DESC LIMIT $2",
+        )
+        .bind(target_actor_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?)
+    }
+
+    /// Local handles this actor follows (accepted), newest first.
+    pub async fn following_list(
+        pool: &sqlx::PgPool,
+        follower_actor_id: i64,
+        limit: i64,
+    ) -> Result<Vec<(i64, String)>, DbError> {
+        Ok(sqlx::query_as(
+            "SELECT a.id, a.username FROM follows f \
+             JOIN actors a ON a.id = f.target_actor_id \
+             WHERE f.follower_actor_id = $1 AND f.state = 'accepted' \
+             AND a.deleted_at IS NULL AND a.suspended_at IS NULL AND a.domain IS NULL \
+             ORDER BY f.created_at DESC, a.id DESC LIMIT $2",
+        )
+        .bind(follower_actor_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?)
+    }
+
     pub async fn fetch_by_pair(
         pool: &sqlx::PgPool,
         follower_actor_id: i64,

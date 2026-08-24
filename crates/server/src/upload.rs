@@ -55,10 +55,11 @@ pub async fn upload(
         }
     };
 
-    let (data, caption_raw) = match read_upload_fields(&mut multipart, size_cap_bytes).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
+    let (data, caption_raw, sound_title_raw, has_audio) =
+        match read_upload_fields(&mut multipart, size_cap_bytes).await {
+            Ok(v) => v,
+            Err(resp) => return resp,
+        };
     let Some(data) = data else {
         return problem(
             StatusCode::BAD_REQUEST,
@@ -157,6 +158,43 @@ pub async fn upload(
         }
     };
 
+    // Sound attribution: find-or-create the named sound and attach it. A clip
+    // with music/voiceover but no explicit title gets the TikTok-style default.
+    let sound_title = sound_title_raw
+        .as_deref()
+        .map(toottok_federation::note::strip_html_tags)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            // Explicit title wins; else a music/voiceover track implies an
+            // original sound named after the uploader.
+            if sound_title_raw.is_none() && has_audio {
+                Some(format!("original sound — @{}", auth.actor.username))
+            } else {
+                None
+            }
+        });
+    if let Some(title) = sound_title.as_deref() {
+        match toottok_db::sound::get_or_create(pool, title, Some(actor_id)).await {
+            Ok(sound_id) => {
+                if let Err(e) = Clip::set_sound(pool, clip.id, Some(sound_id)).await {
+                    let _ = state.store.delete(&key).await;
+                    let _ = Clip::mark_failed(pool, clip.id).await;
+                    return problem(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "database error",
+                        format!("{e}"),
+                    );
+                }
+            }
+            Err(e) => {
+                let _ = state.store.delete(&key).await;
+                let _ = Clip::mark_failed(pool, clip.id).await;
+                return problem(StatusCode::INTERNAL_SERVER_ERROR, "database error", format!("{e}"));
+            }
+        }
+    }
+
     if let Some(cap) = caption_html.as_deref() {
         if let Err(e) = toottok_db::hashtag::link_hashtags_to_clip(pool, clip.id, cap).await {
             let _ = state.store.delete(&key).await;
@@ -243,9 +281,11 @@ pub(crate) async fn read_file_field(
 async fn read_upload_fields(
     multipart: &mut Multipart,
     size_cap_bytes: usize,
-) -> Result<(Option<Vec<u8>>, Option<String>), Response> {
+) -> Result<(Option<Vec<u8>>, Option<String>, Option<String>, bool), Response> {
     let mut file: Option<Vec<u8>> = None;
     let mut caption: Option<String> = None;
+    let mut sound_title: Option<String> = None;
+    let mut has_audio = false;
     while let Some(mut field) = multipart
         .next_field()
         .await
@@ -254,6 +294,41 @@ async fn read_upload_fields(
         match field.name() {
             Some(n) if n.eq_ignore_ascii_case("file") => {
                 file = read_file_chunks(&mut field, size_cap_bytes).await?;
+            }
+            Some(n) if n.eq_ignore_ascii_case("sound_title") => {
+                // Small text field, same bound as captions.
+                let mut buf = Vec::new();
+                loop {
+                    match field.chunk().await {
+                        Ok(Some(chunk)) => {
+                            if buf.len() + chunk.len() > CAPTION_MAX_BYTES {
+                                return Err(problem(
+                                    StatusCode::PAYLOAD_TOO_LARGE,
+                                    "sound title too large",
+                                    format!("sound title exceeds {CAPTION_MAX_BYTES} bytes"),
+                                ));
+                            }
+                            buf.extend_from_slice(&chunk);
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            return Err(problem(
+                                StatusCode::BAD_REQUEST,
+                                "invalid multipart",
+                                format!("{e}"),
+                            ))
+                        }
+                    }
+                }
+                sound_title = String::from_utf8(buf).ok().filter(|s| !s.is_empty());
+            }
+            Some(n) if n.eq_ignore_ascii_case("music") || n.eq_ignore_ascii_case("vo") => {
+                has_audio = true;
+                // Drain the audio blob without buffering it here — it is
+                // consumed downstream by the edit-manifest pipeline.
+                while let Ok(Some(chunk)) = field.chunk().await {
+                    drop(chunk);
+                }
             }
             Some(n) if n.eq_ignore_ascii_case("caption_html") => {
                 let mut buf = Vec::new();
@@ -284,7 +359,7 @@ async fn read_upload_fields(
             _ => {}
         }
     }
-    Ok((file, caption))
+    Ok((file, caption, sound_title, has_audio))
 }
 
 /// Hard buffer bound for the caption field.

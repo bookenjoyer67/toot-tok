@@ -443,15 +443,42 @@ pub async fn api_follow(
         );
     }
 
-    let remote = match toottok_federation::fetch_remote_actor(pool, &state.egress, &url).await {
-        Ok(r) => r,
-        Err(e) => {
-            return problem(
-                StatusCode::BAD_GATEWAY,
-                "actor fetch failed",
-                format!("could not fetch remote actor: {e}"),
-            )
-            .into_response()
+    let local_target = toottok_federation::activity::is_local_url(&url, &data.domain);
+    let remote = if local_target {
+        // Same-instance follow: resolve the row directly. Routing this through
+        // fetch_remote_actor would run the REMOTE upsert against the local
+        // actor's ap_id and stamp a non-NULL domain onto the row, which hides
+        // the profile (every local-profile query filters domain IS NULL).
+        let username = url.path().rsplit('/').next().unwrap_or("");
+        match DbActorRow::fetch_by_username_local(pool, username).await {
+            Ok(Some(a)) => a,
+            Ok(None) => {
+                return problem(
+                    StatusCode::BAD_REQUEST,
+                    "actor not found",
+                    format!("no local actor at {url}"),
+                )
+            }
+            Err(e) => {
+                return problem(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "database error",
+                    format!("{e}"),
+                )
+                .into_response()
+            }
+        }
+    } else {
+        match toottok_federation::fetch_remote_actor(pool, &state.egress, &url).await {
+            Ok(r) => r,
+            Err(e) => {
+                return problem(
+                    StatusCode::BAD_GATEWAY,
+                    "actor fetch failed",
+                    format!("could not fetch remote actor: {e}"),
+                )
+                .into_response()
+            }
         }
     };
     if remote.id == auth.actor.id {
@@ -468,7 +495,6 @@ pub async fn api_follow(
     // A same-instance follow never crosses the network: delivering the Follow
     // to our own inbox would trip the egress guard's local-URL check, so
     // record it as accepted right away and skip delivery.
-    let local_target = toottok_federation::activity::is_local_url(&url, &data.domain);
     let initial_state = if local_target {
         "accepted"
     } else {
@@ -521,6 +547,7 @@ pub async fn api_follow(
         Json(json!({
             "follower": auth.actor.ap_id,
             "target": remote.ap_id,
+            "target_actor_id": remote.id,
             "state": initial_state,
             "activity_id": follow_id,
         })),
@@ -580,6 +607,121 @@ pub async fn api_unfollow(
             format!("{e}"),
         )
         .into_response(),
+    }
+}
+
+/// GET /api/v1/follows/mine — actor ids + handles this user follows
+/// (state accepted). Lets the web UI hydrate follow-button state in one call.
+pub async fn api_my_follows(
+    State(state): State<AppState>,
+    data: Data<FederationData>,
+    auth: AuthUser,
+) -> Response {
+    let Some(pool) = &state.pool else {
+        return problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database unavailable",
+            "database is not configured",
+        );
+    };
+    let _ = &data;
+    match Follow::following_rows(pool, auth.actor.id).await {
+        Ok(rows) => {
+            let items: Vec<Value> = rows
+                .into_iter()
+                .map(|(actor_id, username, domain)| {
+                    json!({ "actor_id": actor_id, "username": username, "domain": domain })
+                })
+                .collect();
+            Json(json!({ "following": items })).into_response()
+        }
+        Err(e) => problem(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "database error",
+            format!("{e}"),
+        ),
+    }
+}
+
+/// GET /api/v1/profiles/{username}/follow-state — is the caller following the
+/// named local profile? Cheap check for the profile page's Follow button.
+pub async fn api_follow_state(
+    State(state): State<AppState>,
+    data: Data<FederationData>,
+    auth: AuthUser,
+    Path(username): Path<String>,
+) -> Response {
+    let Some(pool) = &state.pool else {
+        return problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database unavailable",
+            "database is not configured",
+        );
+    };
+    let _ = &data;
+    let target = match DbActorRow::fetch_by_username_local(pool, &username).await {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            return problem(StatusCode::NOT_FOUND, "profile not found", format!("no actor named @{username}"))
+        }
+        Err(e) => {
+            return problem(StatusCode::INTERNAL_SERVER_ERROR, "database error", format!("{e}"))
+        }
+    };
+    let state_str = match Follow::fetch_by_pair(pool, auth.actor.id, target.id).await {
+        Ok(Some(f)) => f.state,
+        Ok(None) => "none".to_string(),
+        Err(e) => {
+            return problem(StatusCode::INTERNAL_SERVER_ERROR, "database error", format!("{e}"))
+        }
+    };
+    Json(json!({ "target_actor_id": target.id, "state": state_str })).into_response()
+}
+
+/// GET /api/v1/profiles/{username}/{list} — followers | following handles
+/// (local actors only, newest first, capped at 200).
+pub async fn api_follow_list(
+    State(state): State<AppState>,
+    data: Data<FederationData>,
+    auth: AuthUser,
+    Path((username, list)): Path<(String, String)>,
+) -> Response {
+    let Some(pool) = &state.pool else {
+        return problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "database unavailable",
+            "database is not configured",
+        );
+    };
+    let _ = (&data, auth);
+    if !matches!(list.as_str(), "followers" | "following") {
+        return problem(StatusCode::NOT_FOUND, "list", "use followers or following");
+    }
+    let target = match DbActorRow::fetch_by_username_local(pool, &username).await {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            return problem(
+                StatusCode::NOT_FOUND,
+                "profile not found",
+                format!("no actor named @{username}"),
+            )
+        }
+        Err(e) => return problem(StatusCode::INTERNAL_SERVER_ERROR, "database error", format!("{e}")),
+    };
+    let rows = if list == "followers" {
+        Follow::follower_rows(pool, target.id, 200).await
+    } else {
+        Follow::following_list(pool, target.id, 200).await
+    };
+    match rows {
+        Ok(rows) => {
+            let items: Vec<Value> = rows
+                .into_iter()
+                .map(|(actor_id, username)| json!({ "actor_id": actor_id, "username": username }))
+                .collect();
+            Json(json!({ "items": items })).into_response()
+        }
+        Err(e) => problem(StatusCode::INTERNAL_SERVER_ERROR, "database error", format!("{e}")),
     }
 }
 

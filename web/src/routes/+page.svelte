@@ -110,12 +110,49 @@
 		if (loadingMore || inflightByKind[activeKind] || loadError) return;
 		void fetchPage(activeKind, cursor);
 	});
+
+	function goTo(index: number): void {
+		const clamped = Math.max(0, Math.min(index, items.length - 1));
+		activeIndex = clamped;
+		scroller?.children[clamped]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+	}
+
+	function onKeydown(e: KeyboardEvent): void {
+		const t = e.target as HTMLElement | null;
+		if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+		switch (e.key) {
+			case 'j':
+			case 'ArrowDown':
+				e.preventDefault();
+				goTo(activeIndex + 1);
+				break;
+			case 'k':
+			case 'ArrowUp':
+				e.preventDefault();
+				goTo(activeIndex - 1);
+				break;
+			case 'l':
+				e.preventDefault();
+				items[activeIndex] && document.dispatchEvent(new CustomEvent('toottok-like'));
+				break;
+			case 'm':
+				e.preventDefault();
+				document.dispatchEvent(new CustomEvent('toottok-mute'));
+				break;
+			case 'c':
+				e.preventDefault();
+				if (items[activeIndex]) commentsClip = items[activeIndex];
+				break;
+		}
+	}
 </script>
 
 <svelte:head>
 	<title>TootTok</title>
 	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 </svelte:head>
+
+<svelte:window onkeydown={onKeydown} />
 
 <div class="tabs">
 	<button class:active={activeKind === 'following'} onclick={() => switchKind('following')}>

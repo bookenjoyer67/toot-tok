@@ -195,6 +195,10 @@ pub fn app(state: AppState) -> Router {
         .route("/api/v1/accounts/me/avatar", post(accounts::avatar))
         .route("/api/v1/feed/following", get(social::following_feed))
         .route("/api/v1/feed/discover", get(social::discover_feed))
+        .route("/api/v1/feed/trending", get(social::trending_feed))
+        .route("/api/v1/tags/trending", get(social::trending_tags))
+        .route("/api/v1/sounds/{id}", get(social::sound_detail))
+        .route("/api/v1/sounds/{id}/clips", get(social::sound_clips))
         .route(
             "/api/v1/clips/{id}/like",
             post(social::like_clip).delete(social::unlike_clip),
@@ -203,6 +207,11 @@ pub fn app(state: AppState) -> Router {
             "/api/v1/clips/{id}/announce",
             post(social::announce_clip).delete(social::unannounce_clip),
         )
+        .route(
+            "/api/v1/clips/{id}/bookmark",
+            put(social::bookmark_clip).delete(social::unbookmark_clip),
+        )
+        .route("/api/v1/bookmarks", get(social::list_bookmarks))
         .route(
             "/api/v1/comments/{id}",
             axum::routing::delete(social::delete_comment),
@@ -313,9 +322,18 @@ fn federation_routes(config: FederationConfig<FederationData>) -> Router<AppStat
         .route("/clips/{id}", get(federation::clip_object))
         .route("/clips/{id}/activity", get(federation::clip_activity))
         .route("/api/v1/follows", post(federation::api_follow))
+        .route("/api/v1/follows/mine", get(federation::api_my_follows))
         .route(
             "/api/v1/follows/{target_id}/unfollow",
             post(federation::api_unfollow),
+        )
+        .route(
+            "/api/v1/profiles/{username}/follow-state",
+            get(federation::api_follow_state),
+        )
+        .route(
+            "/api/v1/profiles/{username}/{list}",
+            get(federation::api_follow_list),
         )
         .layer(FederationMiddleware::new(config))
         .route_layer(from_fn(move |req: Request, next: Next| {

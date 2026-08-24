@@ -3,6 +3,7 @@ pub mod activity;
 pub mod actor;
 pub mod announce;
 pub mod audit;
+pub mod bookmark;
 pub mod clip;
 pub mod comment;
 pub mod email_token;
@@ -17,6 +18,7 @@ pub mod media_asset;
 pub mod password;
 pub mod session;
 pub mod settings;
+pub mod sound;
 pub mod tombstone;
 pub mod user;
 

@@ -43,6 +43,8 @@ export interface EditManifest {
 	coverTime: number;
 	caption: string;
 	cwText: string | null;
+	/** Optional user-named sound; server defaults to "original sound — @user" when music/VO present. */
+	soundTitle?: string | null;
 }
 
 /** Length of a segment after trim + speed, in final seconds. */

@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { apiGet } from '$lib/api';
-	import type { Clip, Profile } from '$lib/types';
-
-	type ProfileResponse = Profile & { clips?: Clip[] };
+	import FollowButton from '$lib/components/FollowButton.svelte';
+	import { followingMap, sessionUser } from '$lib/stores';
+	import type { Clip, FeedResponse, Profile, ProfileResponse } from '$lib/types';
 
 	const username = $derived(page.params.username ?? '');
 
@@ -18,18 +18,94 @@
 		loading = true;
 		apiGet<ProfileResponse>(`/profiles/${encodeURIComponent(u)}`)
 			.then((data) => {
-				// API nests the actor: { actor: {...}, clips: [...] } — flatten it
+				// API nests the actor: { actor: {...}, clips: [...], counts... }
 				const nested = data as ProfileResponse & { actor?: Profile };
 				profile = nested.actor
-					? { ...nested.actor, clips: data.clips ?? [] }
-					: data;
-				loading = false;
-			})
+					? {
+							...nested.actor,
+							clips: data.clips ?? [],
+							follower_count: data.follower_count,
+							following_count: data.following_count,
+							likes_received: data.likes_received,
+							is_following: data.is_following
+							}
+							: data;
+							loading = false;
+							// Trust the server's is_following over a possibly-stale client map.
+							const actor = nested.actor;
+							if ($sessionUser && actor) {
+								const name = actor.username;
+								followingMap.update((m) => {
+									if (!data.is_following && !m.has(name)) return m;
+									const next = new Map(m);
+									if (data.is_following) {
+										next.set(name, { actorId: actor.actor_id ?? 0, domain: null });
+									} else {
+										next.delete(name);
+									}
+									return next;
+								});
+							}
+							})
 			.catch((err: unknown) => {
 				loadError = err instanceof Error ? err.message : 'Could not load this profile.';
 				loading = false;
 			});
 	});
+
+	const isMe = $derived(
+		Boolean(
+			$sessionUser &&
+				$sessionUser.username === username &&
+				!(profile?.domain && profile.domain.length > 0)
+		)
+	);
+
+	type Tab = 'clips' | 'saved';
+	let tab = $state<Tab>('clips');
+	let savedClips = $state<Clip[] | null>(null);
+	let savedLoading = $state(false);
+
+	type ListKind = 'followers' | 'following';
+	let listOpen = $state<ListKind | null>(null);
+	let listItems = $state<{ actor_id: number; username: string }[]>([]);
+	let listLoading = $state(false);
+
+	async function openList(kind: ListKind): Promise<void> {
+		listOpen = kind;
+		listLoading = true;
+		listItems = [];
+		try {
+			const data = await apiGet<{ items?: { actor_id: number; username: string }[] }>(
+				`/profiles/${encodeURIComponent(username)}/${kind}`
+			);
+			listItems = data.items ?? [];
+		} catch {
+			listItems = [];
+		} finally {
+			listLoading = false;
+		}
+	}
+
+	async function loadSaved(): Promise<void> {
+		if (savedClips || savedLoading) return;
+		savedLoading = true;
+		try {
+			const data = await apiGet<FeedResponse>('/bookmarks');
+			savedClips = data.items ?? [];
+		} catch {
+			savedClips = [];
+		} finally {
+			savedLoading = false;
+		}
+	}
+
+	function switchTab(t: Tab): void {
+		tab = t;
+		if (t === 'saved' && isMe) void loadSaved();
+	}
+
+	const gridClips = $derived(tab === 'clips' ? (profile?.clips ?? []) : (savedClips ?? []));
 
 	function fmt(n: number): string {
 		if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
@@ -61,18 +137,40 @@
 				<p class="handle">@{profile.username}{#if profile.domain}@{profile.domain}{/if}</p>
 			</div>
 			<dl class="stats">
-				<!-- Backend sends only live clip rows; follower/following counts
-				     arrive in a later API revision — show clips we can count. -->
-				<div><dt>Clips</dt><dd>{fmt(profile.clips?.length ?? 0)}</dd></div>
+				<div>
+					<button class="stat-btn" onclick={() => openList('following')}>
+						<dt>Following</dt><dd>{fmt(profile.following_count ?? 0)}</dd>
+					</button>
+				</div>
+				<div>
+					<button class="stat-btn" onclick={() => openList('followers')}>
+						<dt>Followers</dt><dd>{fmt(profile.follower_count ?? 0)}</dd>
+					</button>
+				</div>
+				<div><dt>Likes</dt><dd>{fmt(profile.likes_received ?? 0)}</dd></div>
 			</dl>
 			{#if profile.summary}
 				<!-- summary is escaped plain text from the backend; render as TEXT -->
 				<p class="bio">{profile.summary}</p>
 			{/if}
+			{#if !isMe && !profile.domain}
+				<FollowButton
+					username={profile.username}
+					actorId={profile.actor_id}
+					size="lg"
+				/>
+			{/if}
 		</header>
 
-		<section class="grid" aria-label="Clips by @{profile.username}">
-			{#each profile.clips ?? [] as clip (clip.id)}
+		<nav class="ptabs" aria-label="Profile sections">
+			<button class:active={tab === 'clips'} onclick={() => switchTab('clips')}>Clips</button>
+			{#if isMe}
+				<button class:active={tab === 'saved'} onclick={() => switchTab('saved')}>Saved</button>
+			{/if}
+		</nav>
+
+	<section class="grid" aria-label="Clips by @{profile.username}">
+			{#each gridClips as clip (clip.id)}
 				<div class="thumb">
 					{#if clip.poster_url}
 						<img src={clip.poster_url} alt="" loading="lazy" />
@@ -91,11 +189,40 @@
 					</span>
 				</div>
 			{:else}
-				<p class="none">No clips yet.</p>
+				<p class="none">{tab === 'saved' ? 'Nothing saved yet.' : 'No clips yet.'}</p>
 			{/each}
-		</section>
+	</section>
 	{/if}
 </div>
+
+{#if listOpen}
+	<div
+		class="lback"
+		role="presentation"
+		onclick={(e) => e.target === e.currentTarget && (listOpen = null)}
+	>
+		<div class="lsheet" role="dialog" aria-label={`${listOpen} of @${username}`}>
+			<p class="lhead">{listOpen === 'followers' ? 'Followers' : 'Following'}</p>
+			{#if listLoading}
+				<div class="lcenter"><span class="spinner"></span></div>
+			{:else if listItems.length === 0}
+				<p class="lnone">Nobody here yet.</p>
+			{:else}
+				<ul class="llist">
+					{#each listItems as u (u.actor_id)}
+						<li>
+							<a href={`/profile/${encodeURIComponent(u.username)}`} onclick={() => (listOpen = null)}>
+								<span class="lavatar">{(u.username || '?').charAt(0).toUpperCase()}</span>
+								<span class="lname">@{u.username}</span>
+							</a>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+			<button class="lclose" onclick={() => (listOpen = null)}>Close</button>
+		</div>
+	</div>
+{/if}
 
 <style>
 	.page {
@@ -115,6 +242,129 @@
 		color: #ff8298;
 		font-size: 0.9rem;
 		text-align: center;
+	}
+
+	.ptabs {
+		display: flex;
+		gap: 4px;
+		margin-bottom: 1rem;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+	}
+
+	.ptabs button {
+		flex: 1;
+		border: none;
+		background: transparent;
+		color: #8f8f9a;
+		font: inherit;
+		font-weight: 600;
+		font-size: 0.9rem;
+		padding: 0.6rem 0;
+		cursor: pointer;
+		border-bottom: 2px solid transparent;
+	}
+
+	.ptabs button.active {
+		color: var(--text);
+		border-bottom-color: var(--text);
+	}
+
+	.stat-btn {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 2px;
+		border: none;
+		background: transparent;
+		color: inherit;
+		font: inherit;
+		cursor: pointer;
+		padding: 0;
+	}
+
+	.stat-btn:hover dd {
+		color: var(--accent);
+	}
+
+	.lback {
+		position: fixed;
+		inset: 0;
+		z-index: 90;
+		background: rgba(0, 0, 0, 0.55);
+		display: flex;
+		align-items: flex-end;
+		justify-content: center;
+	}
+
+	.lsheet {
+		width: min(100%, 420px);
+		max-height: 65dvh;
+		display: flex;
+		flex-direction: column;
+		background: var(--surface, #16161d);
+		border-radius: 16px 16px 0 0;
+		padding: 14px 12px calc(var(--safe-bottom, 0px) + 12px);
+	}
+
+	.lhead {
+		margin: 0 0 8px;
+		text-align: center;
+		font-weight: 700;
+	}
+
+	.llist {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		overflow-y: auto;
+		flex: 1;
+	}
+
+	.llist a {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 0.5rem 0.4rem;
+		border-radius: 10px;
+		color: var(--text, #eee);
+		text-decoration: none;
+	}
+
+	.llist a:hover {
+		background: rgba(255, 255, 255, 0.06);
+	}
+
+	.lavatar {
+		display: grid;
+		place-items: center;
+		width: 34px;
+		height: 34px;
+		border-radius: 50%;
+		background: #2a2a33;
+		color: #fff;
+		font-weight: 700;
+	}
+
+	.lname {
+		font-size: 0.92rem;
+	}
+
+	.lnone,
+	.lcenter {
+		padding: 1.5rem 0;
+		text-align: center;
+		color: #9a9aa5;
+	}
+
+	.lclose {
+		margin-top: 8px;
+		border: none;
+		border-top: 1px solid rgba(255, 255, 255, 0.08);
+		background: transparent;
+		color: #9a9aa5;
+		font: inherit;
+		padding: 0.7rem 0 0;
+		cursor: pointer;
 	}
 
 	.actor {
