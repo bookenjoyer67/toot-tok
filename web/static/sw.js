@@ -1,9 +1,10 @@
 /* TootTok service worker: cache-first for immutable build assets,
-   network-first for navigations with cached-shell offline fallback. */
+   network-first for navigations with cached-shell offline fallback,
+   plus auto-reload of open tabs when a new build deploys. */
 
 /* Bump on every deploy so activate() purges the previous cache (it deletes
    any cache whose name !== CACHE), clearing stale hashed /_app/ chunks. */
-const CACHE = 'toottok-v3';
+const CACHE = 'toottok-v4';
 const SHELL = '/index.html';
 const PRECACHE = [SHELL, '/manifest.webmanifest', '/icon.svg'];
 
@@ -24,6 +25,42 @@ self.addEventListener('activate', (event) => {
 			.then(() => self.clients.claim())
 	);
 });
+
+/* ── deploy watcher ────────────────────────────────────────────────────
+   Deploys swap _app chunk hashes. A long-lived PWA still referencing the
+   old chunk set would 404 on lazily-imported routes (e.g. Profile) and
+   hang. Detect a new build version and hard-navigate every open tab so
+   everyone lands on the current bundle. */
+let knownVersion = null;
+let reloading = false;
+
+async function checkDeploy() {
+	if (reloading) return;
+	try {
+		const res = await fetch('/_app/version.json', { cache: 'no-store' });
+		if (!res.ok) return;
+		const data = await res.json();
+		const version = data.version ?? null;
+		if (version === null) return;
+		if (knownVersion === null) {
+			knownVersion = version;
+			return;
+		}
+		if (version !== knownVersion) {
+			reloading = true;
+			const clients = await self.clients.matchAll({ type: 'window' });
+			for (const client of clients) {
+				try {
+					await client.navigate(client.url);
+				} catch {
+					// best-effort
+				}
+			}
+		}
+	} catch {
+		// offline or transient — ignore
+	}
+}
 
 self.addEventListener('fetch', (event) => {
 	const request = event.request;
@@ -50,6 +87,8 @@ self.addEventListener('fetch', (event) => {
 	}
 
 	if (request.mode === 'navigate') {
+		// piggyback a deploy check on real navigations (SW wakes for fetches)
+		event.waitUntil(checkDeploy());
 		event.respondWith(
 			fetch(request, { cache: 'no-cache' })
 				.then((response) => {

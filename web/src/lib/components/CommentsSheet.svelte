@@ -153,7 +153,7 @@
 						<img class="avatar" src={c.author.avatar_path} alt="" />
 					{:else}
 						<span class="avatar fallback"
-							>{(c.author.display_name || c.author.username).charAt(0).toUpperCase()}</span
+							>{(c.author.display_name || c.author.username || '?').charAt(0).toUpperCase()}</span
 						>
 					{/if}
 					<div class="meta">

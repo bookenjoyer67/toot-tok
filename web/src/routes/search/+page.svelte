@@ -183,7 +183,7 @@
 								{#if a.avatar_path}
 									<img class="avatar" src={a.avatar_path} alt="" loading="lazy" />
 								{:else}
-									<span class="avatar fallback">{(a.display_name || a.username).charAt(0).toUpperCase()}</span>
+									<span class="avatar fallback">{(a.display_name || a.username || '?').charAt(0).toUpperCase()}</span>
 								{/if}
 								<span class="who">
 									<span class="name">{a.display_name || a.username}</span>

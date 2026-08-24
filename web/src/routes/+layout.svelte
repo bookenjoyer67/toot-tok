@@ -12,7 +12,10 @@
 		if (!import.meta.env.PROD) return;
 		if (!('serviceWorker' in navigator)) return;
 
-		navigator.serviceWorker.register('/sw.js').catch(() => {});
+		// Versioned SW URL: a new CACHE version changes the query, which
+		// changes the browser cache key — so an updated worker installs
+		// immediately even if the CDN pinned the bare /sw.js for hours.
+		navigator.serviceWorker.register('/sw.js?v=4').catch(() => {});
 
 		const onMessage = (event: MessageEvent): void => {
 			if ((event.data as { type?: string } | null)?.type === 'OFFLINE') {

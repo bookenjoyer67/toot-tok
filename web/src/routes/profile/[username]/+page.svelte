@@ -18,7 +18,11 @@
 		loading = true;
 		apiGet<ProfileResponse>(`/profiles/${encodeURIComponent(u)}`)
 			.then((data) => {
-				profile = data;
+				// API nests the actor: { actor: {...}, clips: [...] } — flatten it
+				const nested = data as ProfileResponse & { actor?: Profile };
+				profile = nested.actor
+					? { ...nested.actor, clips: data.clips ?? [] }
+					: data;
 				loading = false;
 			})
 			.catch((err: unknown) => {
@@ -49,11 +53,11 @@
 				<img class="avatar" src={profile.avatar_path} alt="" />
 			{:else}
 				<span class="avatar fallback">
-					{(profile.display_name || profile.username).charAt(0).toUpperCase()}
+					{(profile.display_name || profile.username || '?').charAt(0).toUpperCase()}
 				</span>
 			{/if}
 			<div class="who">
-				<h1>{profile.display_name || profile.username}</h1>
+				<h1>{profile.display_name || profile.username || '?'}</h1>
 				<p class="handle">@{profile.username}{#if profile.domain}@{profile.domain}{/if}</p>
 			</div>
 			<dl class="stats">

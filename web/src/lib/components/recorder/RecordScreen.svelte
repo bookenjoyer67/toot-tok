@@ -14,7 +14,7 @@
 	let stream = $state<MediaStream | null>(null);
 	let recorder: MediaRecorder | null = null;
 	let chunks: Blob[] = [];
-	let facing: 'environment' | 'user' = 'environment';
+	let facing = $state<'environment' | 'user'>('environment');
 	let flashOn = $state(false);
 	let camError = $state<string | null>(null);
 	let starting = $state(true);
@@ -34,16 +34,14 @@
 		camError = null;
 		try {
 			stream?.getTracks().forEach((t) => t.stop());
+			// No width/height ideals: requesting 1080x1920 makes Android hand back
+			// a portrait-cropped stream that object-fit:cover over-zooms. Take the
+			// camera's native frame and let CSS fit it.
 			stream = await navigator.mediaDevices.getUserMedia({
-				video: {
-					facingMode: { ideal: facing },
-					width: { ideal: 1080 },
-					height: { ideal: 1920 },
-					frameRate: { ideal: 30 }
-				},
+				video: { facingMode: { ideal: facing }, frameRate: { ideal: 30 } },
 				audio: false
 			});
-			if (videoEl) {
+			if (videoEl && videoEl.srcObject !== stream) {
 				videoEl.srcObject = stream;
 				await videoEl.play().catch(() => {});
 			}
@@ -207,10 +205,17 @@
 		</div>
 	{:else}
 		<div class="stage">
-			{#if stream}
-				<video bind:this={videoEl} autoplay muted playsinline class="preview"></video>
-			{:else}
-				<div class="preview placeholder"></div>
+			<!-- element ALWAYS mounted; startCamera attaches the stream -->
+			<video
+				bind:this={videoEl}
+				autoplay
+				muted
+				playsinline
+				class="preview"
+				class:mirror={facing === 'user'}
+			></video>
+			{#if !stream}
+				<div class="preview placeholder" aria-hidden="true"></div>
 			{/if}
 
 			<!-- top bar -->
@@ -300,6 +305,11 @@
 		width: 100%;
 		height: 100%;
 		object-fit: cover;
+	}
+	/* Front camera previews are mirrored (selfie view) — text reads correctly.
+	   Recording itself stays unmirrored data; only the live preview flips. */
+	.preview.mirror {
+		transform: scaleX(-1);
 	}
 	.preview.placeholder {
 		background: #0b0b0f;
