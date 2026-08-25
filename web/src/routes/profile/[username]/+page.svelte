@@ -160,10 +160,11 @@
 				<!-- summary is escaped plain text from the backend; render as TEXT -->
 				<p class="bio">{profile.summary}</p>
 			{/if}
-			{#if !isMe && !profile.domain}
+			{#if !isMe}
 				<FollowButton
 					username={profile.username}
 					actorId={profile.actor_id}
+					domain={profile.domain || null}
 					size="lg"
 				/>
 			{/if}

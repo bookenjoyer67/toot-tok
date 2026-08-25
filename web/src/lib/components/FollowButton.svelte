@@ -23,14 +23,18 @@
 
 	async function follow(): Promise<void> {
 		if (!me) return;
-		// Local targets: /users/{username}; remote: profile page passes a URL later.
-		const uri =
-			domain && domain !== me.username
-				? `https://${domain}/users/${username}`
-				: `${location.origin}/users/${encodeURIComponent(username)}`;
-		const res = await apiPost<{ target_actor_id?: number }>('/follows', {
-			actor_uri: uri
-		});
+		// Preferred: the actor row id from feed payloads — exact, no guessing.
+		// Fallback (search results etc): construct a handle URI.
+		const body =
+			actorId && actorId > 0
+				? { target_actor_id: actorId }
+				: {
+						actor_uri:
+							domain && domain !== 'local'
+								? `https://${domain}/ap/users/${encodeURIComponent(username)}`
+								: `${location.origin}/users/${encodeURIComponent(username)}`
+					};
+		const res = await apiPost<{ target_actor_id?: number }>('/follows', body);
 		const id = res.target_actor_id ?? actorId ?? 0;
 		followingMap.update((m) => {
 			const next = new Map(m);

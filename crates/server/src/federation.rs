@@ -412,7 +412,10 @@ pub async fn nodeinfo_doc(
 #[derive(Deserialize)]
 pub struct FollowRequest {
     /// Full ActivityPub actor URI to follow, e.g. `https://b.test/users/bob`.
-    actor_uri: String,
+    actor_uri: Option<String>,
+    /// Or a known local actor row id (from feed payloads) — preferred when
+    /// available: no network fetch, no handle guessing.
+    target_actor_id: Option<i64>,
 }
 
 /// POST /api/v1/follows — create/refresh the remote actor (egress-guarded
@@ -431,7 +434,102 @@ pub async fn api_follow(
             "database is not configured",
         );
     };
-    let url = match Url::parse(&body.actor_uri) {
+
+    // Fast path: the client knows our actor row id (feed payloads carry it).
+    // No URL parsing, no remote fetch — resolve and go.
+    if let Some(target_id) = body.target_actor_id {
+        if target_id == auth.actor.id {
+            return problem(
+                StatusCode::BAD_REQUEST,
+                "cannot follow self",
+                "you cannot follow yourself",
+            );
+        }
+        let target = match DbActorRow::fetch_by_id(pool, target_id).await {
+            Ok(Some(a)) => a,
+            Ok(None) => {
+                return problem(
+                    StatusCode::NOT_FOUND,
+                    "actor not found",
+                    format!("no actor with id {target_id}"),
+                )
+            }
+            Err(e) => {
+                return problem(StatusCode::INTERNAL_SERVER_ERROR, "database error", format!("{e}"))
+                    .into_response()
+            }
+        };
+        if target.domain.is_none() {
+            // Local target: same-instance follow rules apply.
+            let activity = follow_activity(&data.base_url, &auth.actor.ap_id, &target.ap_id);
+            let follow_id = activity_id_from_json(&activity);
+            match Follow::upsert(pool, auth.actor.id, target.id, Some(&follow_id), "accepted").await
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    return problem(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "database error",
+                        format!("{e}"),
+                    )
+                    .into_response()
+                }
+            }
+            return Json(json!({
+                "follower": auth.actor.ap_id,
+                "target": target.ap_id,
+                "target_actor_id": target.id,
+                "state": "accepted",
+                "activity_id": follow_id,
+            }))
+            .into_response();
+        }
+        // Remote target: build the Follow + deliver (shared with the URI path).
+        let activity = follow_activity(&data.base_url, &auth.actor.ap_id, &target.ap_id);
+        let follow_id = activity_id_from_json(&activity);
+        match Follow::upsert(pool, auth.actor.id, target.id, Some(&follow_id), "requested").await {
+            Ok(_) => {}
+            Err(e) => {
+                return problem(StatusCode::INTERNAL_SERVER_ERROR, "database error", format!("{e}"))
+                    .into_response()
+            }
+        }
+        let _ = ActivityRow::create_outbound(
+            pool,
+            &follow_id,
+            &auth.actor.ap_id,
+            Some(target.ap_id.as_str()),
+            &activity,
+        )
+        .await;
+        let inbox = toottok_federation::deliver::shared_inbox_or_inbox(&target);
+        match toottok_federation::deliver::enqueue_delivery(pool, auth.actor.id, &inbox, &activity)
+            .await
+        {
+            Ok(_) => {}
+            Err(e) => {
+                return problem(StatusCode::INTERNAL_SERVER_ERROR, "database error", format!("{e}"))
+                    .into_response()
+            }
+        }
+        return Json(json!({
+            "follower": auth.actor.ap_id,
+            "target": target.ap_id,
+            "target_actor_id": target.id,
+            "state": "requested",
+            "activity_id": follow_id,
+        }))
+        .into_response();
+    }
+
+    let Some(actor_uri) = body.actor_uri.as_deref() else {
+        return problem(
+            StatusCode::BAD_REQUEST,
+            "invalid request",
+            "either actor_uri or target_actor_id is required",
+        );
+    };
+    let url = match Url::parse(actor_uri) {
         Ok(u) => u,
         Err(e) => return problem(StatusCode::BAD_REQUEST, "invalid actor_uri", e.to_string()),
     };
