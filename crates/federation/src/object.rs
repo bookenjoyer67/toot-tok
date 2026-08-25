@@ -72,6 +72,12 @@ pub struct RemoteActorParts {
     pub shared_inbox: Option<String>,
     pub outbox: String,
     pub followers: String,
+    /// Profile display name (`name` on the wire).
+    pub display_name: Option<String>,
+    /// Bio/summary (HTML; callers render as plain text).
+    pub summary: Option<String>,
+    /// Remote avatar URL from `icon.url` (hot-linked, not downloaded).
+    pub avatar_url: Option<String>,
 }
 
 /// `endpoints` block of an ActivityPub actor (shared inbox).
@@ -213,6 +219,12 @@ impl Object for DbActor {
                 .map(Url::as_str)
                 .unwrap_or_else(|| id.as_str()),
             id.as_str(),
+            json.name.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+            json.summary
+                .as_deref()
+                .map(crate::note::strip_html_tags)
+                .as_deref(),
+            None,
         )
         .await?;
         Ok(DbActor::from_row(row))

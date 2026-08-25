@@ -34,6 +34,7 @@ use crate::data::FederationData;
 use crate::deliver::enqueue_delivery;
 use crate::error::Error;
 use crate::note;
+use crate::note::strip_html_tags;
 use crate::object::{actor_type_from_json, DbActor, RemoteActorParts};
 
 /// `Follow` — a remote actor requesting to follow a local one (or our outbound
@@ -985,6 +986,27 @@ pub fn parse_remote_actor_json(value: &Value) -> Result<RemoteActorParts, Error>
         .and_then(Value::as_str)
         .ok_or_else(|| Error::Other("remote actor json missing publicKey".into()))?
         .to_string();
+    // Profile fields: `name` is the display name, `summary` the (HTML)
+    // bio — strip tags so it renders as plain text — and `icon.url` the
+    // remote avatar (hot-linked; never downloaded).
+    let display_name = value
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let summary = value
+        .get("summary")
+        .and_then(Value::as_str)
+        .map(strip_html_tags)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let avatar_url = value
+        .get("icon")
+        .and_then(|icon| icon.get("url"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .filter(|u| u.starts_with("https://") || u.starts_with("http://"));
     Ok(RemoteActorParts {
         id: id.to_string(),
         domain,
@@ -1000,6 +1022,9 @@ pub fn parse_remote_actor_json(value: &Value) -> Result<RemoteActorParts, Error>
             .map(str::to_string),
         outbox,
         followers,
+        display_name,
+        summary,
+        avatar_url,
     })
 }
 

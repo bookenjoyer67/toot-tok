@@ -118,6 +118,9 @@ pub async fn fetch_remote_actor(
         &parts.outbox,
         &parts.followers,
         &parts.id,
+        parts.display_name.as_deref(),
+        parts.summary.as_deref(),
+        parts.avatar_url.as_deref(),
     )
     .await?;
     let _ = toottok_db::instance::Instance::upsert_success(

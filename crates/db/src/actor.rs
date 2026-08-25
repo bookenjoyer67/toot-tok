@@ -188,13 +188,17 @@ impl Actor {
         outbox_url: &str,
         followers_url: &str,
         ap_id: &str,
+        display_name: Option<&str>,
+        summary: Option<&str>,
+        avatar_url: Option<&str>,
     ) -> Result<Self, DbError> {
         Ok(sqlx::query_as::<_, Self>(
             r#"
             INSERT INTO actors
                 (username, domain, actor_type, public_key_pem, private_key_pem,
-                 inbox_url, shared_inbox_url, outbox_url, followers_url, ap_id)
-            VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, $9)
+                 inbox_url, shared_inbox_url, outbox_url, followers_url, ap_id,
+                 display_name, summary, avatar_path)
+            VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, $9, $10, $11, $12)
             ON CONFLICT (ap_id) DO UPDATE
             SET username = EXCLUDED.username,
                 domain = EXCLUDED.domain,
@@ -204,6 +208,9 @@ impl Actor {
                 shared_inbox_url = EXCLUDED.shared_inbox_url,
                 outbox_url = EXCLUDED.outbox_url,
                 followers_url = EXCLUDED.followers_url,
+                display_name = COALESCE(EXCLUDED.display_name, actors.display_name),
+                summary = COALESCE(EXCLUDED.summary, actors.summary),
+                avatar_path = COALESCE(EXCLUDED.avatar_path, actors.avatar_path),
                 deleted_at = NULL,
                 updated_at = now()
             RETURNING *
@@ -218,6 +225,9 @@ impl Actor {
         .bind(outbox_url)
         .bind(followers_url)
         .bind(ap_id)
+        .bind(display_name)
+        .bind(summary)
+        .bind(avatar_url)
         .fetch_one(pool)
         .await?)
     }
