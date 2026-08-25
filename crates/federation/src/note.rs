@@ -105,12 +105,14 @@ fn utf8_len(first_byte: u8) -> usize {
 /// Try to decode one entity at the start of `rest` (which begins with `&`).
 /// Returns `(decoded, bytes_consumed)` on success.
 fn decode_one_entity(rest: &str) -> Option<(String, usize)> {
-    const NAMED: [(&str, &str); 5] = [
+    const NAMED: [(&str, &str); 7] = [
         ("amp", "&"),
         ("lt", "<"),
         ("gt", ">"),
         ("quot", "\""),
         ("apos", "'"),
+        ("nbsp", "\u{00a0}"),
+        ("hellip", "…"),
     ];
     debug_assert!(rest.starts_with('&'));
     let after = &rest[1..];
