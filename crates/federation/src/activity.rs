@@ -554,6 +554,16 @@ impl Accept {
                 "accepted",
             )
             .await?;
+            // Real-fediverse UX: a fresh remote connection should show
+            // content, not an empty profile. Queue a best-effort backfill of
+            // the actor's recent public posts (Atom → AP objects → same
+            // ingest path as inbox Creates). Failures are logged by the
+            // worker; they must never fail the Accept.
+            if let Err(e) =
+                crate::backfill::enqueue_backfill(pool, follow.target_actor_id, 20).await
+            {
+                tracing::warn!(error = %e, "backfill enqueue failed; continuing");
+            }
         }
         inbound_finish(pool, self.id.as_str()).await?;
         Ok(())

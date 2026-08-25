@@ -2,6 +2,7 @@
 //! delivery, and the crate (`activitypub_federation`) wiring.
 
 pub mod activity;
+pub mod backfill;
 pub mod data;
 pub mod deliver;
 pub mod egress;

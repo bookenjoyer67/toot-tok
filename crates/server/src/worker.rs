@@ -369,6 +369,9 @@ async fn handle_job(
         "probe" => process_probe(pool, store, job).await,
         "transcode" => process_transcode(pool, store, job).await,
         "finalize" => process_finalize(pool, base_url, job).await,
+        "backfill_actor" => {
+            toottok_federation::backfill::process_backfill_job(pool, egress, job).await
+        }
         other => {
             warn!(id = job.id, kind = %other, "unknown job kind; dead-lettering");
             let clip_id = job.payload.get("clip_id").and_then(|v| v.as_i64());
